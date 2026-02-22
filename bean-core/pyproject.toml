@@ -1,0 +1,52 @@
+[project]
+name = "bean"
+description = "Tiny framework for bootstrapping apps"
+dynamic = ["version"]
+dependencies = []
+requires-python = ">=3.14"
+
+authors = [
+  { name = "numen-0", email = "numen.0x1dea@gmail.com" },
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+
+keywords = [
+    "bean",
+    "bean.core",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
+]
+
+[project.urls]
+homepage = "https://github.com/numen-0/bean"
+repository = "https://github.com/numen-0/bean"
+issues = "https://github.com/numen-0/bean/issues"
+documentation = "https://github.com/numen-0/bean/bean-core/src/bean/core.py"
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = { attr = "bean.core.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["bean*"]
+namespaces = true
