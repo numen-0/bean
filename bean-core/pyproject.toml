@@ -1,5 +1,5 @@
 [project]
-name = "bean"
+name = "bean-core"
 description = "Tiny framework for bootstrapping apps"
 dynamic = ["version"]
 dependencies = []
