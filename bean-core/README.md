@@ -20,6 +20,27 @@ With `bean.core` you get:
 
 > Just enough to cook some beans.
 
+## Installation
+
+Requirements:
+
+- Python `3.14+`
+
+Using `pip`:
+
+```sh
+pip install --upgrade bean-core
+```
+
+Using `curl` (direct download):
+
+```sh
+FILE="src/bean/core.py"
+mkdir -p "$(dirname "$FILE")"
+curl -Lso "$FILE" \
+    https://raw.githubusercontent.com/numen-0/bean/refs/heads/main/bean-core/src/bean/core.py
+```
+
 ## Quick Examples
 
 This is a quick reference for the main `API`.
