@@ -36,8 +36,8 @@ class TestConfig(BaseTest):
         cfg = (
             self.Config
             .load()
-            .load_dict({"HOST_NAME": "from_dict", "PORT": 1000})
-            .load_dict({"PORT": 2000})
+            .from_dict({"HOST_NAME": "from_dict", "PORT": 1000})
+            .from_dict({"PORT": 2000})
             .build()
         )
 
@@ -45,7 +45,7 @@ class TestConfig(BaseTest):
         self.assertEqual(cfg.HOST_NAME, "from_dict")
 
     def test_skip_missing_file(self):
-        loader = self.Config.load().load_json("nonexistent.json")
+        loader = self.Config.load().from_json("nonexistent.json")
         self.assertEqual(loader.as_dict(), {})
 
     def test_build_with_required_missing_raises(self):
@@ -56,7 +56,7 @@ class TestConfig(BaseTest):
         cfg = (
             self.Config
             .load()
-            .load_dict({"HOST_NAME": "localhost"})
+            .from_dict({"HOST_NAME": "localhost"})
             .build()
         )
 
@@ -71,7 +71,7 @@ class TestConfig(BaseTest):
         cfg = (
             self.Config
             .load()
-            .load_dict({
+            .from_dict({
                 "HOST_NAME": "localhost",
                 "PORT": "9090",
                 "DEBUG": "true",
@@ -86,7 +86,7 @@ class TestConfig(BaseTest):
         with self.assertRaises(TypeError):
             ( self.Config
                 .load()
-                .load_dict({
+                .from_dict({
                     "HOST_NAME": "localhost",
                     "PORT": "not-int",
                 })
@@ -96,7 +96,7 @@ class TestConfig(BaseTest):
         loader = (
             self.Config
             .load()
-            .load_dict({
+            .from_dict({
                 "HOST_NAME": "localhost",
                 "UNKNOWN": "value"
             })
@@ -113,7 +113,7 @@ class TestConfig(BaseTest):
             PORT = bean.ConfigField(int, validator=lambda x: x > 0)
 
         with self.assertRaises(ValueError):
-            C.load().load_dict({"PORT": -1}).build()
+            C.load().from_dict({"PORT": -1}).build()
 
     # misc
 
@@ -121,7 +121,7 @@ class TestConfig(BaseTest):
         loader = (
             self.Config
             .load()
-            .load_dict({"HOST_NAME": "localhost"})
+            .from_dict({"HOST_NAME": "localhost"})
         )
 
         d = loader.as_dict()
@@ -129,10 +129,10 @@ class TestConfig(BaseTest):
 
     # sources
 
-    def test_load_dict(self):
+    def test_from_dict(self):
         ( self.Config
             .load()
-            .load_dict({
+            .from_dict({
                 "HOST_NAME": "localhost",
                 "PORT": "9090",
                 "DEBUG": "true",
@@ -144,10 +144,10 @@ class TestConfig(BaseTest):
         self.assertEqual(self.Config.PORT, 9090)
         self.assertTrue(self.Config.DEBUG)
 
-    def test_load_args(self):
+    def test_from_args(self):
         ( self.Config
             .load()
-            .load_args([
+            .from_args([
                 "--host-name", "localhost",
                 "--port", "9090",
                 "--debug", "true"
@@ -157,7 +157,7 @@ class TestConfig(BaseTest):
         self.assertEqual(self.Config.PORT, 9090)
         self.assertTrue(self.Config.DEBUG)
 
-    def test_load_env(self):
+    def test_from_env(self):
         env = {
             "HOST_NAME": "localhost",
             "PORT": "9090",
@@ -165,25 +165,25 @@ class TestConfig(BaseTest):
         }
 
         with patch.dict(os.environ, env, clear=True):
-            self.Config.load().load_env().build()
+            self.Config.load().from_env().build()
 
             self.assertEqual(self.Config.HOST_NAME, "localhost")
             self.assertEqual(self.Config.PORT, 9090)
             self.assertTrue(self.Config.DEBUG)
 
-    def test_load_env_with_prefix(self):
+    def test_from_env_with_prefix(self):
         env = {
             "APP_HOST_NAME": "localhost",
             "APP_PORT": "9090",
         }
 
         with patch.dict(os.environ, env, clear=True):
-            self.Config.load().load_env(prefix="APP_").build()
+            self.Config.load().from_env(prefix="APP_").build()
 
             self.assertEqual(self.Config.HOST_NAME, "localhost")
             self.assertEqual(self.Config.PORT, 9090)
 
-    def _dump_load(self, content: str, load_fn, suffix: str =".tmp"):
+    def _dump_load(self, content: str, from_fn, suffix: str =".tmp"):
         with (tempfile.NamedTemporaryFile(mode="w",
                                           delete=False,
                                           suffix=suffix) as tmp):
@@ -192,7 +192,7 @@ class TestConfig(BaseTest):
             path = tmp.name
             tmp.close()
 
-            load_fn(self.Config.load(), path).build()
+            from_fn(self.Config.load(), path).build()
 
         self.assertEqual(self.Config.HOST_NAME, "localhost")
         self.assertEqual(self.Config.PORT, 9090)
@@ -200,7 +200,7 @@ class TestConfig(BaseTest):
 
         os.remove(path)
 
-    def test_load_py_class(self):
+    def test_from_py_class(self):
         content = dedent("""
             class Config:
                 HOST_NAME = "localhost"
@@ -208,9 +208,9 @@ class TestConfig(BaseTest):
                 DEBUG = True
         """).strip()
 
-        self._dump_load(content, BeanConfig._ConfigLoader.load_py, ".py")
+        self._dump_load(content, BeanConfig._ConfigLoader.from_py, ".py")
 
-    def test_load_py_instance(self):
+    def test_from_py_instance(self):
         content = dedent("""
             class _Config:
                 HOST_NAME = "localhost"
@@ -220,9 +220,9 @@ class TestConfig(BaseTest):
             Config = _Config()
         """).strip()
 
-        self._dump_load(content, BeanConfig._ConfigLoader.load_py, ".py")
+        self._dump_load(content, BeanConfig._ConfigLoader.from_py, ".py")
 
-    def test_load_py_dict(self):
+    def test_from_py_dict(self):
         content = dedent("""
             Config = {
                 "HOST_NAME": "localhost",
@@ -231,9 +231,9 @@ class TestConfig(BaseTest):
             }
         """).strip()
 
-        self._dump_load(content, BeanConfig._ConfigLoader.load_py, ".py")
+        self._dump_load(content, BeanConfig._ConfigLoader.from_py, ".py")
 
-    def test_load_toml(self):
+    def test_from_toml(self):
         content = dedent("""
             [app]
             host_name = "localhost"
@@ -241,9 +241,9 @@ class TestConfig(BaseTest):
             debug = true
         """).strip()
 
-        self._dump_load(content, BeanConfig._ConfigLoader.load_toml, ".toml")
+        self._dump_load(content, BeanConfig._ConfigLoader.from_toml, ".toml")
 
-    def test_load_ini(self):
+    def test_from_ini(self):
         content = dedent("""
             [app]
             host.name = localhost
@@ -252,12 +252,12 @@ class TestConfig(BaseTest):
         """).strip()
 
         def foo(self, path):
-            return BeanConfig._ConfigLoader.load_ini(self, path=path,
+            return BeanConfig._ConfigLoader.from_ini(self, path=path,
                                                      section="app")
 
         self._dump_load(content, foo, ".ini")
 
-    def test_load_json(self):
+    def test_from_json(self):
         content = dedent("""
             {
                 "host-name": "localhost",
@@ -266,5 +266,5 @@ class TestConfig(BaseTest):
             }
         """).strip()
 
-        self._dump_load(content, BeanConfig._ConfigLoader.load_json, ".json")
+        self._dump_load(content, BeanConfig._ConfigLoader.from_json, ".json")
 

@@ -69,13 +69,13 @@ if __name__ == "__main__":
 BeanConfig can be populated from multiple sources, with a defined priority.
 Available sources:
 
-- `.load_args()`: parse command-line arguments with `argparse`
-- `.load_dict()`: load configuration from a Python dictionary
-- `.load_env()`: load environment variables matching `prefix + filedname`
-- `.load_ini()`: Load from a `INI` file
-- `.load_json()`: load from a `JSON` file
-- `.load_py()`: load from a Python file exposing a `Config` object by default
-- `.load_toml()`: Load from a `TOML` file
+- `.from_args()`: parse command-line arguments with `argparse`
+- `.from_dict()`: load configuration from a Python dictionary
+- `.from_env()`: load environment variables matching `prefix + filedname`
+- `.from_ini()`: Load from a `INI` file
+- `.from_json()`: load from a `JSON` file
+- `.from_py()`: load from a Python file exposing a `Config` object by default
+- `.from_toml()`: Load from a `TOML` file
 > Note: File loaders will skip missing files unless `force=True` is passed
 
 ```py
@@ -93,9 +93,9 @@ class MyConfig(BeanConfig):
 
 
 ( MyConfig.load()            # load priority:
-    .load_env("APP_")        # 1. environment variables
-    .load_py("./config.py")  # 2. Python file (ignored if not found)
-    .load_args()             # 3. command-line arguments (auto --help)
+    .from_env("APP_")        # 1. environment variables
+    .from_py("./config.py")  # 2. Python file (ignored if not found)
+    .from_args()             # 3. command-line arguments (auto --help)
     .build() )
 
 MyConfig.print_config()

@@ -30,8 +30,9 @@ __all__ = [
     "install_signal_handlers", "shutdown_requested",
     "Scheduler",
     "BeanConfig", "ConfigField",
-    "dirExists", "fileExists", "isDate", "isEmail", "isHost", "isIPv4", "isIPv6",
-    "isNegative", "isPort", "isPositive", "isUrl", "nonEmpty", "pathExists",
+    "dirExists", "fileExists", "isDate", "isEmail", "isHost", "isIPv4",
+    "isIPv6", "isNegative", "isPort", "isPositive", "isUrl", "nonEmpty",
+    "pathExists",
     "main",
 ]
 
@@ -240,7 +241,7 @@ class Logger:
         self._children: List[Logger] = []
 
         self.handlers: List[Logger.Handler] = list(handlers) if handlers else []
-                
+
         Logger._active_loggers.add(self)
 
     # context manager support
@@ -317,7 +318,7 @@ class Logger:
             self.handlers = list(handlers)
         else:
             self.handlers = [handlers]
-        
+
         if cascade:
             for child in self._children:
                 child.set_handlers(self.handlers, cascade)
@@ -395,7 +396,7 @@ class Logger:
         if cascade:
             for child in self._children:
                 child.flush(cascade=cascade)
-        
+
         return self
 
     @atexit.register
@@ -1337,7 +1338,7 @@ class BeanConfig(ABC):
 
         # source loaders
 
-        def _load_source(
+        def _from_source(
             self,
             source: str,
             data: Dict[str, Any],
@@ -1366,10 +1367,10 @@ class BeanConfig(ABC):
 
             return self
 
-        def load_dict(self, d: Dict) -> Self:
-            return self._load_source("dict", d)
+        def from_dict(self, d: Dict) -> Self:
+            return self._from_source("dict", d)
 
-        def load_json(
+        def from_json(
             self,
             path: str,
             force: bool = False
@@ -1382,10 +1383,10 @@ class BeanConfig(ABC):
             with open(path) as f:
                 data = json.load(f)
 
-            return self._load_source(path, data,
+            return self._from_source(path, data,
                                     lambda k: k.upper().replace("-", "_"))
 
-        def load_args(self, args: Optional[list[str]] = None) -> Self:
+        def from_args(self, args: Optional[list[str]] = None) -> Self:
             import argparse
 
             def to_cli(key: str) -> str:
@@ -1405,22 +1406,22 @@ class BeanConfig(ABC):
                 )
 
             parsed = parser.parse_args(args)
-            return self._load_source("args", vars(parsed))
+            return self._from_source("args", vars(parsed))
 
-        def load_env(self, prefix: str = "") -> Self:
+        def from_env(self, prefix: str = "") -> Self:
             import os
 
             def normalize_keys(items):
                 return { k.removeprefix(prefix).upper(): v for k, v in items }
 
             spec = self.config_cls.spec()
-            return self._load_source("env", {
+            return self._from_source("env", {
                     k: v
                     for k, v in normalize_keys(os.environ.items()).items()
                     if k in spec
                 })
 
-        def load_py(
+        def from_py(
             self,
             path: str,
             symbol: str = "Config",
@@ -1442,7 +1443,7 @@ class BeanConfig(ABC):
 
             obj = getattr(mod, symbol)
             if isinstance(obj, dict):
-                return self._load_source(path, obj)
+                return self._from_source(path, obj)
 
             data = {
                 k: getattr(obj, k)
@@ -1450,9 +1451,9 @@ class BeanConfig(ABC):
                 if not k.startswith("_")
             }
 
-            return self._load_source(path, data)
+            return self._from_source(path, data)
 
-        def load_toml(
+        def from_toml(
             self,
             path: str,
             root: str = "app",
@@ -1478,9 +1479,9 @@ class BeanConfig(ABC):
             with open(path, "rb") as f:
                 data = tomllib.load(f).get(root, {})
 
-            return self._load_source(path, flatten_toml(data))
+            return self._from_source(path, flatten_toml(data))
 
-        def load_ini(
+        def from_ini(
             self,
             path: str,
             section: str = "app",
@@ -1508,7 +1509,7 @@ class BeanConfig(ABC):
                 prefix = f"{section}_".upper()
                 return { k.removeprefix(prefix): v for k, v in out.items() }
 
-            return self._load_source(path, flatten_ini())
+            return self._from_source(path, flatten_ini())
 
 # suggar
 def ConfigField(
