@@ -46,7 +46,10 @@ from bean.core import BeanApp, Log, Logger, main, shutdown_requested
 
 class App(BeanApp):
     def startup(self):
-        Log.update(handlers=Logger.TermHandler(Logger.fmt_color))
+        Log.init(
+            level=Logger.Level.from_debug(self.DEBUG),
+            handlers=[Logger.TermHandler(Logger.fmt(color=True))]
+        )
         Log.debug("starting...")
 
     def shutdown(self):

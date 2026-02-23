@@ -50,7 +50,7 @@ from threading import Event, Thread
 from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
-    List, Dict, Tuple, Iterable, Set,
+    List, Dict, TextIO, Tuple, Iterable, Set,
     Any, TypeVar, Generic, Optional, override
 )
 
@@ -159,6 +159,12 @@ class Logger:
         def color(self) -> str:
             return self._color
 
+        # sugar
+
+        @staticmethod
+        def from_debug(debug: bool) -> Logger.Level:
+            return Logger.Level.DEBUG if debug else Logger.Level.INFO
+
     @dataclass
     class Record:
         timestamp: datetime
@@ -170,51 +176,161 @@ class Logger:
         @abstractmethod
         def log(self, record: Logger.Record): ...
         def flush(self): pass
+        def close(self): pass
 
     @staticmethod
     def VoidHandler() -> Logger.Handler:
+
         class VoidHandler(Logger.Handler):
             @override
             def log(self, record: Logger.Record):
                  _ = record  # shut the warn
+            def flush(self): pass
+            def close(self): pass
+
         return VoidHandler()
+
+    @staticmethod
+    def CustomHandler(
+        log: Callable[[Logger.Record], Any],
+        flush: Callable[[], Any] = lambda: ...,
+        close: Callable[[], Any] = lambda: ...,
+    ) -> Logger.Handler:
+
+        class CustomHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._closed = False
+
+            @override
+            def log(self, record: Logger.Record):
+                with self._lock:
+                    if self._closed: return
+                    log(record)
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    if self._closed: return
+                    close()
+                    self._closed = True
+
+        return CustomHandler()
 
     @staticmethod
     def FileHandler(
         path: str,
         fmt_fn: Optional[Callable[[Logger.Record], str]] = None,
     ) -> Logger.Handler:
-        fn = Logger.fmt_basic if fmt_fn is None else fmt_fn
+        fn = Logger.fmt(color=False) if fmt_fn is None else fmt_fn
+
         class FileHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._file = open(path, "a", buffering=1)  # line buffered
+                self._closed = False
+
             @override
             def log(self, record: Logger.Record):
-                with open(path, "a") as f:
-                    f.write(fn(record) + "\n")
+                with self._lock:
+                    if self._closed: return
+                    self._file.write(fn(record) + "\n")
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    self._file.flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    if self._closed: return
+                    self._file.flush()
+                    self._file.close()
+                    self._closed = True
+
         return FileHandler()
 
     @staticmethod
     def TermHandler(
         fmt_fn: Optional[Callable[[Logger.Record], str]] = None,
+        stream: Optional[TextIO] = None,
     ) -> Logger.Handler:
-        fn = Logger.fmt_basic if fmt_fn is None else fmt_fn
+        fn = Logger.fmt() if fmt_fn is None else fmt_fn
+
         class TermHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._closed = False
+
             @override
             def log(self, record: Logger.Record) -> None:
-                print(fn(record), flush=True)
+                with self._lock:
+                    if self._closed: return
+
+                    if stream is not None:
+                        out = stream
+                    elif record.level in (Logger.Level.DEBUG,
+                                          Logger.Level.INFO):
+                        out = sys.stdout
+                    else:
+                        out = sys.stderr
+
+                    print(fn(record), file=out, flush=True)
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    self._closed = True
+
         return TermHandler()
 
     @staticmethod
-    def fmt_basic(record: Record) -> str:
-        return (
-            f"{record.timestamp:%Y-%m-%d %H:%M:%S} | "
-            f"{record.level.name:<5} | "
-            f"{record.logger:<24} | "
-            f"{record.message}"
-        )
+    def fmt(
+        *,
+        color: bool = False,
+        timestamp: bool = True,
+        logger_name: bool = True,
+    ) -> Callable[[Logger.Record], str]:
 
-    @staticmethod
-    def fmt_color(record: Record) -> str:
-        return f"{record.level.color}{Logger.fmt_basic(record)}\033[0m"
+        def fmt(record: Logger.Record) -> str:
+            parts = []
+
+            if timestamp:
+                parts.append(f"{record.timestamp:%Y-%m-%d %H:%M:%S}")
+
+            parts.append(f"{record.level.name:<5}")
+
+            if logger_name:
+                parts.append(f"{record.logger:<24}")
+
+            parts.append(record.message)
+
+            line = " | ".join(parts)
+
+            if color:
+                return f"{record.level.color}{line}\033[0m"
+
+            return line
+
+        return fmt
 
     # Logger
 
@@ -222,6 +338,7 @@ class Logger:
     def __init__(
         self,
         name: str,
+        *,
         level: Level = Level.INFO,
         handlers: Optional[Iterable[Logger.Handler]] = None,
     ):
@@ -236,17 +353,23 @@ class Logger:
         Logger._active_loggers.add(self)
 
     # context manager support
+
     def __enter__(self):
         return self
     def __exit__(self, *_):
-        self.flush()
+        self.close()
+
+        for child in self._children:
+            del child
+
         if self._parent: self._parent._children.remove(self)
         Logger._active_loggers.discard(self)
+
         return False  # don't suppress exceptions
 
     def __del__(self):
         try: # attempt to flush before object is destroyed
-            self.flush()
+            self.close()
             if self._parent: self._parent._children.remove(self)
             Logger._active_loggers.discard(self)
         except Exception: pass
@@ -263,6 +386,7 @@ class Logger:
     def child(
         self,
         name: str,
+        *,
         level: Optional[Level] = None,
         handlers: Optional[List[Logger.Handler]] = None,
     ) -> Logger:
@@ -282,6 +406,7 @@ class Logger:
     def update(
         self,
         name: Optional[str] = None,
+        *,
         level: Optional[Level] = None,
         handlers: Optional[Logger.Handler|Iterable[Logger.Handler]] = None,
         cascade: bool = True
@@ -390,12 +515,46 @@ class Logger:
 
         return self
 
+    def close(self, cascade: bool = False) -> Self:
+        for handler in self.handlers:
+            handler.flush()
+            handler.close()
+
+        if cascade:
+            for child in self._children:
+                child.close()
+
+        return self
+
     @atexit.register
     @staticmethod
-    def flush_all_loggers():
+    def close_all_loggers():
         for log in list(Logger._active_loggers):
-            try: log.flush()
+            try:
+                log.flush()
+                log.close()
             except Exception: pass
+
+    # sugar
+
+    @staticmethod
+    def init(
+        name: str = "bean",
+        level: Logger.Level = Level.INFO,
+        fmt: Optional[Callable[[Logger.Record], str]] = None,
+        handlers: Optional[List[Logger.Handler]] = None,
+    ) -> Logger:
+        """ Initialize root logger. """
+
+        if fmt is None:
+            fmt = Logger.fmt()
+        if handlers is None:
+            handlers = [Logger.TermHandler(fmt)]
+
+        global Log
+
+        Log.update(name, level=level, handlers=handlers)
+        return Log
 
 Log = Logger("bean")
 
@@ -1000,6 +1159,7 @@ class Scheduler:
         self.tasks: List[Scheduler.Task] = []
 
     # context manager support
+
     def __enter__(self) -> Scheduler:
         return self.start()
 

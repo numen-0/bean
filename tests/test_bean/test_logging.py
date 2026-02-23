@@ -54,7 +54,7 @@ class TestLogging(BaseTest):
             logger = Log.child("test-file")
 
             # Add file handler
-            logger.set_handlers([Logger.FileHandler(tmpfile.name, Logger.fmt_basic)])
+            logger.set_handlers([Logger.FileHandler(tmpfile.name, Logger.fmt())])
 
             # Emit log
             logger.info("File test")
