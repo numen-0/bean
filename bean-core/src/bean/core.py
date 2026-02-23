@@ -109,29 +109,20 @@ del _BeanMeta
 # -----------------------------------------------------------------------------
 
 def main(app: BeanApp) -> NoReturn:
-    code = 0
-    try:
-        Log.update(
-            name=app.NAME,
-            level=Logger.Level.DEBUG if app.DEBUG else Logger.Level.INFO,
-        )
-        install_signal_handlers()
+    install_signal_handlers()
 
+    try:
         if app.startup() is False:
-            Log.error("startup failed").flush(True)
             sys.exit(1)
 
         code = app.run()
 
     except Exception:
-        Log.exception("fatal error").flush(True)
         raise
 
     finally:
         if app.shutdown() is False:
-            Log.error("shutdown failed").flush(True)
-            sys.exit(1)
-        Log.flush(True)
+            code = 1
 
     sys.exit(code)
 
