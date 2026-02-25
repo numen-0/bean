@@ -1222,7 +1222,10 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-FieldValue = bool|int|float|str|List[str]
+FieldValue = bool|int|float|str|List[str]|Enum
+ConfigSource = Literal[
+    "args", "dict", "env", "ini", "json", "py", "toml",
+] | str
 
 _C = TypeVar("_C", bound="BeanConfig")
 
@@ -1233,16 +1236,23 @@ class BeanConfig(ABC):
         def __init__(
             self,
             type: type[_T],
+            *,
             description: Optional[str] = None,
             default: Optional[_T] = None,
             validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
             required: bool = False,
+            long_flag: Optional[str] = None,
+            short_flag: Optional[str] = None,
+            shadow: Optional[Iterable[ConfigSource]] = None,
         ):
             self.type = type
             self.description = description
             self.default = default
             self.validator = validator
             self.required = required
+            self.long_flag = long_flag
+            self.short_flag = short_flag
+            self.shadow = set(shadow) if shadow is not None else set()
 
         def __set_name__(self, _, name): self._name = name
 
@@ -1281,6 +1291,39 @@ class BeanConfig(ABC):
             if inst is None:
                 return self     # type: ignore  # before build -> schema
             return inst.__dict__[self._name]    # after build  -> value
+
+        def cast_val(self, val: Any) -> Optional[Any]:
+            exp_t = self.type
+            if isinstance(val, exp_t): return val
+
+            try:
+                if exp_t is bool:
+                    if not isinstance(val, str): return bool(val)
+                    v = val.lower()
+                    if v in ("1", "true", "yes", "on"):  return True
+                    if v in ("0", "false", "no", "off"): return False
+                    return None
+
+                if exp_t is int:    return int(val)
+                if exp_t is float:  return float(val)
+                if exp_t is str:    return str(val)
+
+                if exp_t is list:
+                    if not isinstance(val, str): return [val] # Type error?
+                    return [x.strip() for x in val.split(",")]
+
+                # Note: If an Enum name doesn't match, instead of raising a
+                #       clean `ValueError`, it will cause a `TypeError` because
+                #       on failure the raw value is returned. After all sources
+                #       are loaded, it is then validated against the field type.
+                if issubclass(exp_t, Enum) and isinstance(val, str):
+                    v = val.lower()
+                    for member in exp_t:
+                        if member.name.lower() == v:
+                            return member
+
+            except Exception: pass
+            return None
 
     _instance: ClassVar["BeanConfig | None"] = None
     _spec: ClassVar[Dict[str, _ConfigField]] = {}
@@ -1321,29 +1364,20 @@ class BeanConfig(ABC):
         return cls._spec
 
     @classmethod
-    def load(cls: type[_C]) -> BeanConfig._ConfigLoader[_C]:
-        return BeanConfig._ConfigLoader(cls)
+    def spec_for(cls, source: ConfigSource) -> Dict[str, _ConfigField]:
+        return {
+            k: f
+            for k, f in cls._spec.items()
+            if source not in f.shadow
+        }
 
     @classmethod
-    def cli_help(cls):
-        import argparse
-
-        def to_cli(key: str) -> str:
-            return f"--{key.replace('_', '-').lower()}"
-
-        parser = argparse.ArgumentParser()
-        for k, f in cls.spec().items():
-            arg_key = to_cli(k)
-            t = f.type if f.type != list else str   # lists parsed from str
-            parser.add_argument(
-                arg_key,
-                dest=k,
-                type=t,
-                default=f.default,
-                help=f.description,
-                required=f.required,
-            )
-        parser.print_help()
+    def load(
+        cls: type[_C],
+        strict: bool = False,
+        logger: Optional[Logger] = None,
+    ) -> BeanConfig._ConfigLoader[_C]:
+        return BeanConfig._ConfigLoader(cls, strict, logger)
 
     @classmethod
     def print_config(
@@ -1385,10 +1419,19 @@ class BeanConfig(ABC):
         and generating a final config as a product
         """
 
-        def __init__(self, config_cls: type[_C]):
+        def __init__(
+            self,
+            config_cls: type[_C],
+            strict: bool = False,
+            log: Optional[Logger] = None,
+        ):
             self.config_cls = config_cls
             self._values: Dict[str, Any] = {}
             self._locked = False
+            self.strict = strict
+
+            if log is not None: self.log = log
+            else: self.log = Logger("dummy", handlers=[Logger.VoidHandler()])
 
         # post config steps
 
@@ -1396,7 +1439,9 @@ class BeanConfig(ABC):
             """ validate current config """
             import inspect
 
+            errors = []
             spec = self.config_cls.spec()
+
             # default and normal validators
             for k, f in spec.items():
                 val = self._values.get(k, None)
@@ -1405,13 +1450,18 @@ class BeanConfig(ABC):
                     if f.default is not None:
                         val = f.default
                     elif f.required:
-                        raise ValueError(f"Missing required config: {k}")
+                        errors.append(ValueError(
+                            f"Missing required config: {k}"))
+                        continue
 
                 elif not isinstance(val, f.type):
-                    raise TypeError(f"Invalid type '{type(val).__name__}' for value {k} ({val})")
+                    errors.append(TypeError(
+                        f"Invalid type '{type(val).__name__}' for value {k} ({val})"))
+                    continue
 
                 elif f.validator and not f.validator(val):
-                    raise ValueError(f"Invalid value for {k}: {val}")
+                    errors.append(ValueError(f"Invalid value for {k}: {val}"))
+                    continue
 
                 self._values[k] = val
 
@@ -1422,11 +1472,17 @@ class BeanConfig(ABC):
                 if field is None: continue
 
                 if field not in spec:
-                    raise KeyError(f"Class-level validator '{name}' key '{field}' is not in spec")
+                    errors.append(KeyError(
+                        f"Class-level validator '{name}' key '{field}' is not in spec"))
+                    continue
 
                 val = self._values.get(field, None)
                 if val is not None and not method(val):
-                    raise ValueError(f"Class-level validation failed for {field}: {name}({val})")
+                    errors.append(ValueError(
+                        f"Class-level validation failed for {field}: {name}({val})"))
+
+            if errors:
+                raise ExceptionGroup("Config validation errors", errors)
 
             return self
 
@@ -1453,45 +1509,11 @@ class BeanConfig(ABC):
                 return self._values[name]
             raise AttributeError(name)
 
-        # helpers
-
-        @staticmethod
-        def _cast_type(val: Any, field: BeanConfig._ConfigField):
-            """ Casts value to match the expected field type"""
-            if val is None: return None
-
-            t = field.type
-            if isinstance(val, t): return val
-
-            try:
-                if t is bool:
-                    if not isinstance(val, str): return bool(val)
-                    v = val.lower()
-                    if v in ("1", "true", "yes", "on"): return True
-                    if v in ("0", "false", "no", "off"): return False
-                    return None
-
-                if t is int:    return int(val)
-                if t is float:  return float(val)
-                if t is str:    return str(val)
-
-                if t is list:
-                    if not isinstance(val, str): return [val] # Type error?
-                    return [x.strip() for x in val.split(",")]
-
-            except Exception: pass
-            return val
-
-        @staticmethod
-        def _file_exists(path: str) -> bool:
-            conf_path = Path(path)
-            return conf_path.exists() and conf_path.is_file()
-
         # source loaders
 
         def _from_source(
             self,
-            source: str,
+            source: ConfigSource,
             data: Dict[str, Any],
             key_mapper: Callable[[str], str] = lambda k: k
         ) -> Self:
@@ -1503,18 +1525,36 @@ class BeanConfig(ABC):
             - key_mapper: function to normalize source keys to config keys
             """
 
-            spec = self.config_cls.spec()
+            errors = []
+
+            spec = self.config_cls.spec_for(source)
             for raw_key, raw_val in data.items():
                 key = key_mapper(raw_key)
+
                 if key not in spec:
-                    Log.debug(f"unknown key '{raw_key}' in config from '{source}'")
+                    msg = f"unknown key '{raw_key}' in config from '{source}'"
+                    if self.strict: errors.append(KeyError(msg))
+                    else: self.log.warning(msg)
                     continue
 
-                val = BeanConfig._ConfigLoader._cast_type(raw_val, spec[key])
-                if val is None:
-                    Log.warning(f"Invalid value for {raw_key} ({raw_val}) from '{source}', skipping...")
+                # Note: auto-skip unset values (`None`). Useful for `from_args`
+                #       so missing flags don't raise errors.
+                #
+                #       For other sources, this might silently mask config
+                #       entries. `( '-')`
+                if raw_val is None: 
                     continue
+
+                val = spec[key].cast_val(raw_val)
+                if val is None:
+                    errors.append(ValueError(
+                        f"Invalid value for {raw_key} ({raw_val}) from '{source}'"))
+                    continue
+
                 self._values[key] = val
+
+            if errors:
+                raise ExceptionGroup("Config load errors", errors)
 
             return self
 
@@ -1526,7 +1566,8 @@ class BeanConfig(ABC):
             path: str,
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1541,20 +1582,40 @@ class BeanConfig(ABC):
             import argparse
 
             def to_cli(key: str) -> str:
-                return f"--{key.replace('_', '-').lower()}"
+                return f"{key.replace('_', '-').lower()}"
 
             parser = argparse.ArgumentParser()
-            spec = self.config_cls.spec()
+            spec = self.config_cls.spec_for("args")
             for k, f in spec.items():
-                arg_key = to_cli(k)
-                t = f.type if f.type != list else str   # lists parsed from str
-                parser.add_argument(
-                    arg_key,
+                flags = []
+
+                # Note: we don't mangle user flags
+                if f.long_flag is not None:  flags.append(f.long_flag)
+                else:                        flags.append(f"--{to_cli(k)}")
+                if f.short_flag is not None: flags.append(f.short_flag)
+
+                kwargs: Dict[str, Any] = dict(
                     dest=k,             # store as spec key
-                    type=t,
                     default=None,       # if set it will mask values
-                    help=f.description
+                    help=f.description,
                 )
+
+                if f.type is bool:
+                    if f.default is not None:
+                        if f.default:   kwargs["action"] = "store_false"
+                        else:           kwargs["action"] = "store_true"
+
+                elif f.type is list:
+                    kwargs["type"] = str  # lists parsed from str
+
+                elif issubclass(f.type, Enum):
+                    kwargs["type"] = str
+                    kwargs["choices"] = [m.name for m in f.type]
+
+                else:
+                    kwargs["type"] = f.type
+
+                parser.add_argument(*flags, **kwargs)
 
             parsed = parser.parse_args(args)
             return self._from_source("args", vars(parsed))
@@ -1565,7 +1626,7 @@ class BeanConfig(ABC):
             def normalize_keys(items):
                 return { k.removeprefix(prefix).upper(): v for k, v in items }
 
-            spec = self.config_cls.spec()
+            spec = self.config_cls.spec_for("env")
             return self._from_source("env", {
                     k: v
                     for k, v in normalize_keys(os.environ.items()).items()
@@ -1578,7 +1639,7 @@ class BeanConfig(ABC):
             symbol: str = "Config",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1589,17 +1650,18 @@ class BeanConfig(ABC):
 
             mod = IU.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            if not hasattr(mod, symbol):
+            obj = getattr(mod, symbol, None)
+
+            if obj is None:
                 raise ValueError(f"Python config must expose `{symbol}` object")
 
-            obj = getattr(mod, symbol)
             if isinstance(obj, dict):
                 return self._from_source(path, obj)
 
             data = {
                 k: getattr(obj, k)
-                for k, _ in self.config_cls.spec().items()
-                if not k.startswith("_")
+                for k, _ in self.config_cls.spec_for("py").items()
+                if not k.startswith("_") and hasattr(obj, k)
             }
 
             return self._from_source(path, data)
@@ -1610,7 +1672,7 @@ class BeanConfig(ABC):
             root: str = "app",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1638,7 +1700,7 @@ class BeanConfig(ABC):
             section: str = "app",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1669,9 +1731,17 @@ def ConfigField(
         default: Optional[_T] = None,
         validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
         required: bool = False,
+        short_flag: Optional[str] = None,
+        shadow: Optional[Iterable[str]] = None,
     ) -> _T:
-    return BeanConfig._ConfigField(type, description, default,
-                                   validator, required) # type: ignore
+    return BeanConfig._ConfigField(
+        type,
+        description=description,
+        default=default, validator=validator,
+        required=required,
+        short_flag=short_flag,
+        shadow=shadow,
+    ) # type: ignore
 
 # cleanup
 del _S, _E, _R, _T, _I, _O, _C, _P

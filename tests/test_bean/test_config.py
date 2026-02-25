@@ -1,9 +1,16 @@
+import tempfile, os
+from enum import Enum
 from textwrap import dedent
 from unittest.mock import patch
-import tempfile, os
+
 from tests.utils import BaseTest
 import bean.core as bean
 from bean.core import BeanConfig, ConfigField
+
+class Stage(Enum):
+    DEV = "dev"
+    PROD = "prod"
+    TEST = "test"
 
 class TestConfig(BaseTest):
 
@@ -14,6 +21,7 @@ class TestConfig(BaseTest):
             PORT = ConfigField(int, default=8080)
             DEBUG = ConfigField(bool, default=False)
             HOST_NAME = ConfigField(str, required=True)
+            STAGE = ConfigField(Stage, default=Stage.DEV)
 
         bean.BeanConfig._instance = None
         self.Config = AppConfig
@@ -33,13 +41,11 @@ class TestConfig(BaseTest):
     # load
 
     def test_source_priority(self):
-        cfg = (
-            self.Config
+        cfg = ( self.Config
             .load()
             .from_dict({"HOST_NAME": "from_dict", "PORT": 1000})
             .from_dict({"PORT": 2000})
-            .build()
-        )
+        ).build()
 
         self.assertEqual(cfg.PORT, 2000)
         self.assertEqual(cfg.HOST_NAME, "from_dict")
@@ -49,48 +55,82 @@ class TestConfig(BaseTest):
         self.assertEqual(loader.as_dict(), {})
 
     def test_build_with_required_missing_raises(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ExceptionGroup) as cm:
             self.Config.load().build()
 
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
+
     def test_defaults_applied(self):
-        cfg = (
-            self.Config
+        cfg = ( self.Config
             .load()
             .from_dict({"HOST_NAME": "localhost"})
-            .build()
-        )
+        ).build()
 
-        self.assertEqual(self.Config.PORT,  8080)
-        self.assertEqual(self.Config.DEBUG, False)
-        self.assertEqual(self.Config.HOST_NAME,  "localhost")
-        self.assertEqual(cfg.PORT,  8080)
+        self.assertEqual(cfg.PORT, 8080)
         self.assertEqual(cfg.DEBUG, False)
-        self.assertEqual(cfg.HOST_NAME,  "localhost")
+        self.assertEqual(cfg.HOST_NAME, "localhost")
+        self.assertEqual(cfg.STAGE, Stage.DEV)
+        self.assertEqual(self.Config.PORT, 8080)
+        self.assertEqual(self.Config.DEBUG, False)
+        self.assertEqual(self.Config.HOST_NAME, "localhost")
+        self.assertEqual(self.Config.STAGE, Stage.DEV)
 
     def test_type_casting(self):
-        cfg = (
-            self.Config
+        cfg = ( self.Config
             .load()
             .from_dict({
                 "HOST_NAME": "localhost",
                 "PORT": "9090",
                 "DEBUG": "true",
+                "STAGE": "prod",
             })
-            .build()
-        )
+        ).build()
 
         self.assertEqual(cfg.PORT, 9090)
         self.assertTrue(cfg.DEBUG)
+        self.assertEqual(cfg.STAGE, Stage.PROD)
+
+    def test_enum_case_insensitive(self):
+        cfg = ( self.Config
+            .load()
+            .from_dict({
+                "HOST_NAME": "localhost",
+                "PORT": "9090",
+                "DEBUG": "false",
+                "STAGE": "PrOd",
+            })
+        ).build()
+
+        self.assertEqual(cfg.STAGE, Stage.PROD)
+
+    def test_invalid_enum_raises(self):
+        with self.assertRaises(ExceptionGroup) as cm:
+            ( self.Config
+                .load()
+                .from_dict({
+                    "HOST_NAME": "localhost",
+                    "PORT": "9090",
+                    "DEBUG": "false",
+                    "STAGE": "invalid_stage",
+                })
+            ).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
 
     def test_invalid_cast_error(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ExceptionGroup) as cm:
             ( self.Config
                 .load()
                 .from_dict({
                     "HOST_NAME": "localhost",
                     "PORT": "not-int",
                 })
-                .build() )
+            ).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
 
     def test_unknown_keys_ignored(self):
         loader = (
@@ -112,8 +152,34 @@ class TestConfig(BaseTest):
         class C(bean.BeanConfig):
             PORT = bean.ConfigField(int, validator=lambda x: x > 0)
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ExceptionGroup) as cm:
             C.load().from_dict({"PORT": -1}).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
+    
+    def test_short_flag_and_shadow(self):
+        class AppConfig(BeanConfig):
+            PORT = ConfigField(int, default=8080, short_flag="-p")
+            DEBUG = ConfigField(bool, default=False, short_flag="-d")
+            HOST_NAME = ConfigField(str, required=True)
+            STAGE = ConfigField(Stage, default=Stage.DEV, shadow=["cli"])
+
+        bean.BeanConfig._instance = None
+        cfg = AppConfig.load().from_args([
+            "-p", "9090",
+            "-d",
+            "--host-name", "localhost",
+            "--stage", "TEST",   # should be shadowed
+        ]).build()
+
+        # short flags worked
+        self.assertEqual(cfg.PORT, 9090)
+        self.assertTrue(cfg.DEBUG)
+        self.assertEqual(cfg.HOST_NAME, "localhost")
+
+        # shadowed field should not be applied from CLI
+        self.assertEqual(cfg.STAGE, Stage.TEST)  # default retained
 
     # misc
 
@@ -137,7 +203,7 @@ class TestConfig(BaseTest):
                 "PORT": "9090",
                 "DEBUG": "true",
             })
-            .build())
+        ).build()
 
 
         self.assertEqual(self.Config.HOST_NAME, "localhost")
@@ -150,18 +216,22 @@ class TestConfig(BaseTest):
             .from_args([
                 "--host-name", "localhost",
                 "--port", "9090",
-                "--debug", "true"
-            ]).build())
+                "--debug",
+                "--stage", "TEST"
+            ])
+        ).build()
 
         self.assertEqual(self.Config.HOST_NAME, "localhost")
         self.assertEqual(self.Config.PORT, 9090)
         self.assertTrue(self.Config.DEBUG)
+        self.assertEqual(self.Config.STAGE, Stage.TEST)
 
     def test_from_env(self):
         env = {
             "HOST_NAME": "localhost",
             "PORT": "9090",
             "DEBUG": "true",
+            "STAGE": "test",
         }
 
         with patch.dict(os.environ, env, clear=True):
@@ -170,6 +240,7 @@ class TestConfig(BaseTest):
             self.assertEqual(self.Config.HOST_NAME, "localhost")
             self.assertEqual(self.Config.PORT, 9090)
             self.assertTrue(self.Config.DEBUG)
+            self.assertEqual(self.Config.STAGE, Stage.TEST)
 
     def test_from_env_with_prefix(self):
         env = {
@@ -226,8 +297,9 @@ class TestConfig(BaseTest):
         content = dedent("""
             Config = {
                 "HOST_NAME": "localhost",
-                "PORT": 9090,
+                "PORT": "9090",
                 "DEBUG": True,
+                "STAGE": "test",
             }
         """).strip()
 
@@ -239,6 +311,7 @@ class TestConfig(BaseTest):
             host_name = "localhost"
             port = 9090
             debug = true
+            stage = "test"
         """).strip()
 
         self._dump_load(content, BeanConfig._ConfigLoader.from_toml, ".toml")
@@ -249,6 +322,7 @@ class TestConfig(BaseTest):
             host.name = localhost
             port = 9090
             debug = true
+            stage = test
         """).strip()
 
         def foo(self, path):
@@ -262,7 +336,8 @@ class TestConfig(BaseTest):
             {
                 "host-name": "localhost",
                 "port": "9090",
-                "debug": "true"
+                "debug": "true",
+                "stage": "test"
             }
         """).strip()
 

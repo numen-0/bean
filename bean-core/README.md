@@ -103,16 +103,24 @@ Available sources:
 > Note: File loaders will skip missing files unless `force=True` is passed
 
 ```py
+from enum import Enum
 from bean.core import BeanConfig, ConfigField, isHost, isPort, isEmail
 
+class Color(Enum):
+    RED   = "#ff0000"
+    GREEN = "#00ff00"
+    BLUE  = "#0000ff"
+
 class MyConfig(BeanConfig):
-    NAME: str = ConfigField(str)
-    PORT: int = ConfigField(int, default=8080, validator=isPort)
-    HOST: str = ConfigField(str, default="localhost", validator=isHost)
-    EMAIL: str = ConfigField(str, validator=isEmail)
+    NAME  = ConfigField(str)
+    DEBUG = ConfigField(bool, default=False, short_flag="-d")
+    PORT  = ConfigField(int, default=8080, validator=isPort)
+    HOST  = ConfigField(str, default="localhost", validator=isHost)
+    EMAIL = ConfigField(str, validator=isEmail)
+    COLOR = ConfigField(Color, default=Color.RED)
 
     @BeanConfig.validate("NAME")
-    def check_empty_name(name: str):
+    def check_empty_name(name):
         return len(name) > 0
 
 
@@ -120,13 +128,12 @@ class MyConfig(BeanConfig):
     .from_env("APP_")        # 1. environment variables
     .from_py("./config.py")  # 2. Python file (ignored if not found)
     .from_args()             # 3. command-line arguments (auto --help)
-    .build() )
+).build() 
 
 MyConfig.print_config()
 ```
 > Note: If your type checker complains about check_empty_name, add
 >       `@staticmethod` or `# type: ignore`.
-
 
 ### Pipes
 
