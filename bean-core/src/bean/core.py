@@ -42,7 +42,7 @@ __all__ = [
 
 import re, signal, subprocess, sys, atexit
 from abc import ABC, ABCMeta, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -51,7 +51,7 @@ from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
     List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, TypeVar, Generic, Optional, override
+    Any, TypeVar, Generic, Optional, no_type_check, override
 )
 
 # -----------------------------------------------------------------------------
@@ -713,10 +713,15 @@ class Predicate(Generic[_T]):
         if log: log.debug(f"check {self.name} -> {res}")
         return res
 
-# Suggar
+# sugar
+
 def predicate(fn: Callable[[_T], bool]) -> Predicate[_T]:
     """ Wrap a predicate into a Obj, enabling logical composition. """
     return Predicate(fn)
+
+# cleanup
+
+del _S, _E, _R, _T
 
 # -----------------------------------------------------------------------------
 # pipes
@@ -1051,6 +1056,9 @@ def cat(
 
     return Pipe(foo)
 
+# cleanup
+del _E, _R, _I, _O, _P
+
 # -----------------------------------------------------------------------------
 # signals
 # -----------------------------------------------------------------------------
@@ -1228,35 +1236,79 @@ ConfigSource = Literal[
 ] | str
 
 _C = TypeVar("_C", bound="BeanConfig")
+_F = TypeVar("_F", str, int, float, bool, list[str], Enum)
 
 class BeanConfig(ABC):
-    """ Abstract base class for application configuration. """
+    """ Abstract base class for declarative application configuration.
 
-    class _ConfigField(Generic[_T]):
-        def __init__(
-            self,
-            type: type[_T],
-            *,
-            description: Optional[str] = None,
-            default: Optional[_T] = None,
-            validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
-            required: bool = False,
-            long_flag: Optional[str] = None,
-            short_flag: Optional[str] = None,
-            shadow: Optional[Iterable[ConfigSource]] = None,
-        ):
-            self.type = type
-            self.description = description
-            self.default = default
-            self.validator = validator
-            self.required = required
-            self.long_flag = long_flag
-            self.short_flag = short_flag
-            self.shadow = set(shadow) if shadow is not None else set()
+    `BeanConfig` provides a structured, type-safe configuration system based
+      on declarative field specifications.
 
-        def __set_name__(self, _, name): self._name = name
+    Subclasses define configuration schema via `_ConfigField` declarations.
+    The framework handles:
 
-        def __get__(self, instance, owner) -> _T:
+        - Loading values from one or multiple sources (`json`, `env`, ...)
+        - Type enforcement
+        - Default resolution
+        - Field-level normalization
+        - Field-level validation
+        - Class-level validation (with inheritance support)
+        - CLI flag integration (if enabled)
+    """
+
+    @dataclass
+    class _ConfigField(Generic[_F]):
+        """ Declarative specification of a single configuration field.
+
+        It is purely declarative and contains no runtime state.
+        Runtime values are stored separately by the config loader.
+
+        Lifecycle of a field value:
+
+            1. Raw value is provided (cli, env, ...).
+            2. Value is casted (if necessary).
+            3. Default is applied (if necessary).
+            4. Type is validated.
+            5. `normalizer` is applied (if defined).
+            6. `validator` is executed (if defined).
+            7. Class-level validators run afterwards (if defined).
+
+        @type:          Values must fall under type after config build
+        @required:      If True, the field must be explicitly provided (cannot
+                        rely on default)
+        @default:       Optional default value applied when no value is provided
+        @description:   Optional human-readable description
+        @normalizer:    Optional transformation function applied before
+                        validation. Intended for canonicalization (e.g. strip
+                        strings, expand paths, ...)
+        @validator:     Optional field-level validation function
+        @long_flag:     Optional CLI long flag (e.g. "--port")
+        @short_flag:    Optional CLI short flag (e.g. "-p")
+        @shadow:        Optional set of sources the field can not be set
+        """
+
+        type: type[_F]
+        description: Optional[str] = None
+        required: bool = False
+        default: Optional[_F] = None
+        validator: Optional[Callable[[_F], bool]] = None
+        normalizer: Optional[Callable[[_F], _F]] = None
+        long_flag: Optional[str] = None
+        short_flag: Optional[str] = None
+        shadow: set[str] = field(default_factory=set)
+
+        def __post_init__(self):
+            if isinstance(self.shadow, Iterable):
+                self.shadow = set(self.shadow)
+
+        def __set_name__(self, owner, name):
+            self._name = name
+            if self.default is None and not self.required:
+                raise TypeError(
+                    f"Unbound ConfigField, '{owner.__name__}.{self._name}' has no default and is not required"
+                )
+
+        def __get__(self, instance, owner) -> _F:
             """ HACK!!!
             Descriptor access logic.
 
@@ -1327,6 +1379,8 @@ class BeanConfig(ABC):
 
     _instance: ClassVar["BeanConfig | None"] = None
     _spec: ClassVar[Dict[str, _ConfigField]] = {}
+    # allow override `{ FIELD_NAME: { FN_NAME: fn, ... }, ... }`
+    _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
 
     def __init_subclass__(cls, **kwargs):
         """ Build the immutable schema `_spec` at class definition time.
@@ -1345,15 +1399,26 @@ class BeanConfig(ABC):
 
         cls._spec = fields
 
-    @staticmethod
+    @classmethod
     def validate(
-        field_name: str
-    ) -> Callable[[Callable[[_T], bool]], Callable[[_T], bool]]:
+        cls,
+        *keys: str
+    ) -> Callable[[Callable[[_F], bool]], Callable[[_F], bool]]:
         """ decorator to make custom validators on function definition """
-        def wrapper(fn: Callable[[_T], bool]) -> Callable[[_T], bool]:
-            setattr(fn, "_validate_field", field_name)
+
+        def decorator(fn: Callable[[_F], bool]) -> Callable[[_F], bool]:
+            orig_fn = getattr(fn, "__func__", fn) # unwrap staticmethod
+            name = str(orig_fn.__name__)
+
+            # allow override `cls.validators[FIELD_NAME][FN]`
+            for key in keys:
+                cls._global_validators.setdefault(
+                    key,
+                    {}
+                )[name] = orig_fn # type: ignore
             return fn
-        return wrapper
+
+        return decorator
 
     @classmethod
     def _set_instance(cls, obj: BeanConfig):
@@ -1437,52 +1502,81 @@ class BeanConfig(ABC):
 
         def validate(self) -> BeanConfig._ConfigLoader[_C]:
             """ validate current config """
-            import inspect
 
             errors = []
             spec = self.config_cls.spec()
 
-            # default and normal validators
+            # field-level
+
             for k, f in spec.items():
                 val = self._values.get(k, None)
 
+                # default / required
                 if val is None:
-                    if f.default is not None:
-                        val = f.default
-                    elif f.required:
+                    if f.required:
                         errors.append(ValueError(
                             f"Missing required config: {k}"))
                         continue
 
-                elif not isinstance(val, f.type):
+                    assert f.default is not None # already asserted at init
+                    val = f.default
+
+                # type check
+                if not isinstance(val, f.type):
                     errors.append(TypeError(
                         f"Invalid type '{type(val).__name__}' for value {k} ({val})"))
                     continue
 
-                elif f.validator and not f.validator(val):
+                # normalize
+                if f.normalizer is not None: val = f.normalizer(val)
+
+
+                # field-level validator
+                if f.validator and not f.validator(val):
                     errors.append(ValueError(f"Invalid value for {k}: {val}"))
                     continue
 
                 self._values[k] = val
 
-            # class-level per-field validators
-            for name, method in inspect.getmembers(self.config_cls,
-                                                   predicate=callable):
-                field: Optional[str] = getattr(method, "_validate_field", None)
-                if field is None: continue
+            if errors: raise ExceptionGroup("Config validation errors", errors)
 
+            # class-level per-field validators
+
+            def collect_validators(
+            ) -> Dict[str, Dict[str, Callable[[FieldValue], bool]]]:
+                """Dynamically collect validators via MRO."""
+                validators = {}
+
+                for base in reversed(self.config_cls.__mro__):
+                    base_v = getattr(base, "_global_validators", None)
+                    if not base_v: continue
+
+                    for key, d in base_v.items():
+                        validators.setdefault(key, {}).update(d)
+
+                return validators
+
+            for field, d in collect_validators().items():
                 if field not in spec:
-                    errors.append(KeyError(
-                        f"Class-level validator '{name}' key '{field}' is not in spec"))
+                    fmt = f"Class-level validator '%s' key '{field}' is not in spec"
+                    errors.extend(
+                        KeyError(fmt % name)
+                        for name in d.keys()
+                    )
                     continue
 
                 val = self._values.get(field, None)
-                if val is not None and not method(val):
-                    errors.append(ValueError(
-                        f"Class-level validation failed for {field}: {name}({val})"))
+                assert val is not None
 
-            if errors:
-                raise ExceptionGroup("Config validation errors", errors)
+                fmt = f"Class-level validation failed for {field}: %s({val})"
+
+                errors.extend(
+                    ValueError(fmt % name)
+                    for name, method in d.items()
+                    if not method(val)
+                )
+
+            if errors: raise ExceptionGroup("Config validation errors", errors)
 
             return self
 
@@ -1491,7 +1585,8 @@ class BeanConfig(ABC):
             obj = self.validate().config_cls()
 
             # Note: we override the instance attr not the class attributes
-            for k, v in self._values.items(): setattr(obj, k, v)
+            for k, v in self._values.items():
+                setattr(obj, k, v)
 
             self.config_cls._set_instance(obj)
             return obj
@@ -1542,7 +1637,7 @@ class BeanConfig(ABC):
                 #
                 #       For other sources, this might silently mask config
                 #       entries. `( '-')`
-                if raw_val is None: 
+                if raw_val is None:
                     continue
 
                 val = spec[key].cast_val(raw_val)
@@ -1724,27 +1819,44 @@ class BeanConfig(ABC):
 
             return self._from_source(path, flatten_ini())
 
-# suggar
+# sugar
+
 def ConfigField(
-        type: type[_T],
+        type: type[_F],
+        *,
         description: Optional[str] = None,
-        default: Optional[_T] = None,
-        validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
-        required: bool = False,
+        required: Optional[bool] = None,
+        default: Optional[_F] = None,
+        normalizer: Optional[Callable[[_F], _F]] = None,
+        validator: Optional[Predicate[_F]|Callable[[_F], bool]] = None,
+        long_flag: Optional[str] = None,
         short_flag: Optional[str] = None,
         shadow: Optional[Iterable[str]] = None,
-    ) -> _T:
+    ) -> _F:
+    """ Sugar to declare a BeanConfig fields.
+
+    This wraps `BeanConfig._ConfigField` and auto-infers `required` if not
+    provided:
+        - If `default` is None and `required` is not explicitly set, the field
+          becomes required.
+        - Otherwise, `required` is set to `False`.
+    """
+    if required is None: required = default is None
     return BeanConfig._ConfigField(
         type,
         description=description,
-        default=default, validator=validator,
         required=required,
+        default=default,
+        normalizer=normalizer,
+        validator=validator,
+        long_flag=long_flag,
         short_flag=short_flag,
-        shadow=shadow,
+        shadow=set(shadow) if shadow is not None else set(),
     ) # type: ignore
 
 # cleanup
-del _S, _E, _R, _T, _I, _O, _C, _P
+
+del _F, _C
 
 # -----------------------------------------------------------------------------
 # config validators

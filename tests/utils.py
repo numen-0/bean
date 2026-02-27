@@ -1,4 +1,4 @@
-from typing import override
+from typing import NoReturn, override
 import unittest
 import bean.core as bean
 
@@ -13,8 +13,6 @@ class BaseTest(unittest.TestCase):
     def setUp(self):
         bean.BeanApp._initialized = True
         bean.BeanApp.NAME = "test-app"
-        bean.BeanApp.LOG_FILE = None
-        bean.BeanApp.LOG_COLOR = True
         bean.BeanApp._initialized = False
 
         bean._installed = False
@@ -34,3 +32,13 @@ class BaseTest(unittest.TestCase):
                 else:
                     self.assertEqual(fn(*args), expect)
 
+    def assertUnreachable(
+        self,
+        msg: str = "This code path should be unreachable"
+    ) -> NoReturn:
+        """Mark a code path as unreachable. Fails if executed."""
+        self.fail(msg)
+
+    def todo(self, msg: str = "TODO: implement this test"):
+        """Mark a test as a TODO."""
+        self.fail(msg)

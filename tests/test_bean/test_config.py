@@ -24,6 +24,7 @@ class TestConfig(BaseTest):
             STAGE = ConfigField(Stage, default=Stage.DEV)
 
         bean.BeanConfig._instance = None
+        bean.BeanConfig._global_validators = dict()
         self.Config = AppConfig
 
     # build
@@ -147,17 +148,16 @@ class TestConfig(BaseTest):
         self.assertIn("HOST_NAME", d)
         self.assertNotIn("UNKNOWN", d)
 
+    def test_unbound_field_error(self):
+        with self.assertRaises(TypeError) as cm:
+            class _(bean.BeanConfig):
+                NAME = bean.ConfigField(str, required=True)
+                PORT = bean.ConfigField(int, required=False)
 
-    def test_validator(self):
-        class C(bean.BeanConfig):
-            PORT = bean.ConfigField(int, validator=lambda x: x > 0)
+        err = cm.exception
+        self.assertIn("Unbound ConfigField", str(err))
+        self.assertIn("_.PORT", str(err))
 
-        with self.assertRaises(ExceptionGroup) as cm:
-            C.load().from_dict({"PORT": -1}).build()
-
-        eg = cm.exception
-        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
-    
     def test_short_flag_and_shadow(self):
         class AppConfig(BeanConfig):
             PORT = ConfigField(int, default=8080, short_flag="-p")
@@ -180,6 +180,114 @@ class TestConfig(BaseTest):
 
         # shadowed field should not be applied from CLI
         self.assertEqual(cfg.STAGE, Stage.TEST)  # default retained
+
+    # validator
+
+    def test_validator(self):
+        class C(bean.BeanConfig):
+            PORT = bean.ConfigField(int, required=True,
+                                    validator=lambda x: x > 0)
+
+        with self.assertRaises(ExceptionGroup) as cm:
+            C.load().from_dict({"PORT": -1}).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
+
+    def test_linear_inheritance_fails_base_validator(self):
+        """Linear inheritance A -> B, B inherits A's validator, fails validator"""
+        class A(BeanConfig):
+            VAL = ConfigField(int, required=True)
+
+            @staticmethod
+            @BeanConfig.validate("VAL")
+            def check_positive(val: int) -> bool:
+                return val > 0
+
+        class B(A):
+            pass
+
+        with self.assertRaises(ExceptionGroup) as cm:
+            B.load().from_dict({"VAL": -1}).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
+
+    def test_tree_inheritance_mixed(self):
+        """Tree inheritance: A -> B & C, B passes, C fails its own validator"""
+        class A(BeanConfig):
+            VAL = ConfigField(int, required=True)
+
+        @A.validate("VAL")
+        def check_positive(val: int) -> bool:
+            return val >= 0
+
+        class B(A):
+            pass  # inherits validator, should pass
+
+        class C(A):
+            pass
+
+        @C.validate("VAL")
+        def check_even(val: int) -> bool:
+            return val % 2 == 0
+
+        # B should pass
+        b_cfg = B.load().from_dict({"VAL": 2}).build()
+        self.assertEqual(b_cfg.VAL, 2)
+
+        # C should fail if odd
+        with self.assertRaises(ExceptionGroup) as cm:
+            C.load().from_dict({"VAL": 3}).build()
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
+
+    def test_override_validator(self):
+        """Override validator in subclass"""
+        class A(BeanConfig):
+            VAL = ConfigField(int, required=True)
+
+            @staticmethod
+            @BeanConfig.validate("VAL")
+            def check_positive(val: int) -> bool:
+                return val > 0
+
+        @A.validate("VAL")
+        def check_positive(val: int) -> bool:
+            return True  # override, allow all values
+
+        # A should accept negative
+        cfg = A.load().from_dict({"VAL": -100}).build()
+        self.assertEqual(cfg.VAL, -100)
+
+    def test_field_normalizer(self):
+        class C(bean.BeanConfig):
+            RAW = bean.ConfigField(
+                str,
+                normalizer=lambda s: s.strip().upper(),
+                default="  hello  "
+            )
+
+        cfg = C.load().from_dict({"RAW": "  world  "}).build()
+
+        self.assertEqual(cfg.RAW, "WORLD")
+
+        cfg_default = C.load().from_dict({}).build()
+        self.assertEqual(cfg_default.RAW, "HELLO")
+
+    def test_normalizer_then_validator_failure(self):
+        class C(bean.BeanConfig):
+            NAME = bean.ConfigField(
+                str,
+                normalizer=lambda s: s.strip().lower(),
+                validator=lambda s: s.isupper(),
+            )
+
+        with self.assertRaises(ExceptionGroup) as cm:
+            C.load().from_dict({"NAME": "  nope  "}).build()
+
+        eg = cm.exception
+        self.assertTrue(any(isinstance(e, ValueError) for e in eg.exceptions))
 
     # misc
 
