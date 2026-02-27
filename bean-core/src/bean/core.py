@@ -144,6 +144,8 @@ class Logger:
     # logger classes & helpers
 
     class Level(Enum):
+        """ Standard log levels with numeric severity and ANSI color codes. """
+
         FATAL = (4, "\033[1;7;91m")
         ERROR = (3, "\033[91m")
         WARN  = (2, "\033[93m")
@@ -341,16 +343,21 @@ class Logger:
         *,
         level: Level = Level.INFO,
         handlers: Optional[Iterable[Logger.Handler]] = None,
+        parent: Optional[Logger] = None,
     ):
-        self.name: str = name
+        self._name: str = name
+        self.name: str
         self.level: Logger.Level = level
 
-        self._parent: Optional[Logger] = None
+        self._parent: Optional[Logger] = parent
         self._children: List[Logger] = []
 
         self.handlers: List[Logger.Handler] = list(handlers) if handlers else []
 
         Logger._active_loggers.add(self)
+
+        if self._parent is None: self.name = self._name
+        else:                    self.name = f"{self._parent.name}.{self._name}"
 
     # context manager support
 
@@ -396,11 +403,10 @@ class Logger:
             name=name,
             level=level if level is not None else self.level,
             handlers=handlers + self.handlers,
+            parent=self,
         )
 
-        log._parent = self
         self._children.append(log)
-
         return log
 
     def update(
@@ -411,9 +417,18 @@ class Logger:
         handlers: Optional[Logger.Handler|Iterable[Logger.Handler]] = None,
         cascade: bool = True
     ) -> Self:
-        if name is not None:  self.name = name
-        if level is not None: self.set_level(level, cascade)
-        if handlers is not None:  self.add_handlers(handlers, cascade=cascade)
+        if name is not None:     self.set_name(name)
+        if level is not None:    self.set_level(level, cascade)
+        if handlers is not None: self.add_handlers(handlers, cascade=cascade)
+        return self
+
+    def set_name(self, name: str) -> Self:
+        self._name = name
+        if self._parent is None: self.name = self._name
+        else:                    self.name = f"{self._parent.name}.{self._name}"
+
+        for child in self._children:
+            child.set_name(child._name)
         return self
 
     def set_level(self, level: Level, cascade: bool = True) -> Self:
@@ -465,18 +480,10 @@ class Logger:
     def _log(self, level: Level, msg: str) -> Self:
         if level.value < self.level.value: return self
 
-        def logger_path(logger: Logger) -> str:
-            parts = []
-            log = logger
-            while log:
-                parts.append(log.name)
-                log = log._parent
-            return ".".join(reversed(parts))
-
         record = Logger.Record(
             timestamp=datetime.now(),
             level=level,
-            logger=logger_path(self),
+            logger=self.name,
             message=msg,
         )
         for handler in self.handlers: handler.log(record)
