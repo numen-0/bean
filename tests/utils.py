@@ -15,7 +15,7 @@ class BaseTest(unittest.TestCase):
         bean.BeanApp.NAME = "test-app"
         bean.BeanApp._initialized = False
 
-        bean._installed = False
+        setattr(bean.install_signal_handlers, "_installed", False)
         bean._shutdown_event.clear()
 
     def assertCases(self, cases, fn):

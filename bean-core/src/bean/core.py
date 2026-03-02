@@ -51,7 +51,7 @@ from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
     List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, TypeVar, Generic, Optional, no_type_check, override
+    Any, TypeVar, Generic, Optional, override
 )
 
 # -----------------------------------------------------------------------------
@@ -346,8 +346,8 @@ class Logger:
         parent: Optional[Logger] = None,
     ):
         self._name: str = name
-        self.name: str
-        self.level: Logger.Level = level
+        self._full_name: str
+        self._level: Logger.Level = level
 
         self._parent: Optional[Logger] = parent
         self._children: List[Logger] = []
@@ -356,8 +356,10 @@ class Logger:
 
         Logger._active_loggers.add(self)
 
-        if self._parent is None: self.name = self._name
-        else:                    self.name = f"{self._parent.name}.{self._name}"
+        if self._parent is None:
+            self._full_name = self._name
+        else:
+            self._full_name = f"{self._parent._full_name}.{self._name}"
 
     # context manager support
 
@@ -369,7 +371,8 @@ class Logger:
         for child in self._children:
             del child
 
-        if self._parent: self._parent._children.remove(self)
+        if self._parent and self in self._parent._children:
+            self._parent._children.remove(self)
         Logger._active_loggers.discard(self)
 
         return False  # don't suppress exceptions
@@ -377,11 +380,24 @@ class Logger:
     def __del__(self):
         try: # attempt to flush before object is destroyed
             self.close()
-            if self._parent: self._parent._children.remove(self)
+            if self._parent and self in self._parent._children:
+                self._parent._children.remove(self)
             Logger._active_loggers.discard(self)
         except Exception: pass
 
     # logger gen/set
+
+    @property
+    def name(self) -> str: return self._full_name
+
+    @name.setter
+    def name(self, name: str) -> None: self.set_name(name)
+
+    @property
+    def level(self) -> Level: return self._level
+
+    @level.setter
+    def level(self, value: Level): self.set_level(value)
 
     @property
     def root(self) -> Logger:
@@ -401,7 +417,7 @@ class Logger:
 
         log = Logger(
             name=name,
-            level=level if level is not None else self.level,
+            level=level if level is not None else self._level,
             handlers=handlers + self.handlers,
             parent=self,
         )
@@ -424,15 +440,17 @@ class Logger:
 
     def set_name(self, name: str) -> Self:
         self._name = name
-        if self._parent is None: self.name = self._name
-        else:                    self.name = f"{self._parent.name}.{self._name}"
+        if self._parent is None:
+            self._full_name = self._name
+        else:
+            self._full_name = f"{self._parent._full_name}.{self._name}"
 
         for child in self._children:
             child.set_name(child._name)
         return self
 
     def set_level(self, level: Level, cascade: bool = True) -> Self:
-        self.level = level
+        self._level = level
         if cascade:
             for child in self._children:
                 child.set_level(level, cascade)
@@ -478,12 +496,12 @@ class Logger:
     # log
 
     def _log(self, level: Level, msg: str) -> Self:
-        if level.value < self.level.value: return self
+        if level.value < self._level.value: return self
 
         record = Logger.Record(
             timestamp=datetime.now(),
             level=level,
-            logger=self.name,
+            logger=self._full_name,
             message=msg,
         )
         for handler in self.handlers: handler.log(record)
@@ -525,7 +543,8 @@ class Logger:
     def close(self, cascade: bool = False) -> Self:
         for handler in self.handlers:
             handler.flush()
-            handler.close()
+
+        self.handlers.clear()  # detach handlers, don't close
 
         if cascade:
             for child in self._children:
@@ -1071,7 +1090,6 @@ del _E, _R, _I, _O, _P
 # -----------------------------------------------------------------------------
 
 _shutdown_event = Event()
-_installed = False
 
 def install_signal_handlers(
     cb: Optional[Callable[[int, Any], Any]] = None
@@ -1080,9 +1098,8 @@ def install_signal_handlers(
 
     Signals set a shutdown flag that can be checked by the app.
     """
-    global _installed
-    if _installed: return
-    _installed = True
+    if getattr(install_signal_handlers, "_installed", False): return
+    setattr(install_signal_handlers, "_installed", True)
 
     force = False
 
