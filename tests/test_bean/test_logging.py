@@ -18,7 +18,7 @@ class TestLogging(BaseTest):
         logger = Log.child("test")
         logger.set_level(Logger.Level.DEBUG)
 
-        self.assertEqual(logger.name, "test")
+        self.assertEqual(logger.name, "test-logger.test")
         self.assertEqual(logger.level, Logger.Level.DEBUG)
 
         # Check child logger inherits level and handlers
@@ -34,7 +34,7 @@ class TestLogging(BaseTest):
         logger = Log.child("test")
         logger.set_level(Logger.Level.DEBUG)
 
-        self.assertEqual(logger.name, "test")
+        self.assertEqual(logger.name, "test-logger.test")
         self.assertEqual(logger.level, Logger.Level.DEBUG)
 
         # Check child logger inherits level and handlers
@@ -54,7 +54,9 @@ class TestLogging(BaseTest):
             logger = Log.child("test-file")
 
             # Add file handler
-            logger.set_handlers([Logger.FileHandler(tmpfile.name, Logger.fmt_basic)])
+            logger.set_handlers([
+                Logger.FileHandler(tmpfile.name, Logger.fmt())
+            ])
 
             # Emit log
             logger.info("File test")

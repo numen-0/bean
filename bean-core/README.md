@@ -20,6 +20,27 @@ With `bean.core` you get:
 
 > Just enough to cook some beans.
 
+## Installation
+
+Requirements:
+
+- Python `3.14+`
+
+Using `pip`:
+
+```sh
+pip install --upgrade bean-core
+```
+
+Using `curl` (direct download):
+
+```sh
+FILE="src/bean/core.py"
+mkdir -p "$(dirname "$FILE")"
+curl -Lso "$FILE" \
+    https://raw.githubusercontent.com/numen-0/bean/refs/heads/main/bean-core/src/bean/core.py
+```
+
 ## Quick Examples
 
 This is a quick reference for the main `API`.
@@ -46,7 +67,10 @@ from bean.core import BeanApp, Log, Logger, main, shutdown_requested
 
 class App(BeanApp):
     def startup(self):
-        Log.update(handlers=Logger.TermHandler(Logger.fmt_color))
+        Log.init(
+            level=Logger.Level.from_debug(self.DEBUG),
+            handlers=[Logger.TermHandler(Logger.fmt(color=True))]
+        )
         Log.debug("starting...")
 
     def shutdown(self):
@@ -69,40 +93,47 @@ if __name__ == "__main__":
 BeanConfig can be populated from multiple sources, with a defined priority.
 Available sources:
 
-- `.load_args()`: parse command-line arguments with `argparse`
-- `.load_dict()`: load configuration from a Python dictionary
-- `.load_env()`: load environment variables matching `prefix + filedname`
-- `.load_ini()`: Load from a `INI` file
-- `.load_json()`: load from a `JSON` file
-- `.load_py()`: load from a Python file exposing a `Config` object by default
-- `.load_toml()`: Load from a `TOML` file
+- `.from_args()`: parse command-line arguments with `argparse`
+- `.from_dict()`: load configuration from a Python dictionary
+- `.from_env()`: load environment variables matching `prefix + filedname`
+- `.from_ini()`: Load from a `INI` file
+- `.from_json()`: load from a `JSON` file
+- `.from_py()`: load from a Python file exposing a `Config` object by default
+- `.from_toml()`: Load from a `TOML` file
 > Note: File loaders will skip missing files unless `force=True` is passed
 
 ```py
+from enum import Enum
 from bean.core import BeanConfig, ConfigField, isHost, isPort, isEmail
 
+class Color(Enum):
+    RED   = "#ff0000"
+    GREEN = "#00ff00"
+    BLUE  = "#0000ff"
+
 class MyConfig(BeanConfig):
-    NAME: str = ConfigField(str)
-    PORT: int = ConfigField(int, default=8080, validator=isPort)
-    HOST: str = ConfigField(str, default="localhost", validator=isHost)
-    EMAIL: str = ConfigField(str, validator=isEmail)
+    NAME  = ConfigField(str)
+    DEBUG = ConfigField(bool, default=False, short_flag="-d")
+    PORT  = ConfigField(int, default=8080, validator=isPort)
+    HOST  = ConfigField(str, default="localhost", validator=isHost)
+    EMAIL = ConfigField(str, validator=isEmail)
+    COLOR = ConfigField(Color, default=Color.RED)
 
     @BeanConfig.validate("NAME")
-    def check_empty_name(name: str):
+    def check_empty_name(name):
         return len(name) > 0
 
 
 ( MyConfig.load()            # load priority:
-    .load_env("APP_")        # 1. environment variables
-    .load_py("./config.py")  # 2. Python file (ignored if not found)
-    .load_args()             # 3. command-line arguments (auto --help)
-    .build() )
+    .from_env("APP_")        # 1. environment variables
+    .from_py("./config.py")  # 2. Python file (ignored if not found)
+    .from_args()             # 3. command-line arguments (auto --help)
+).build() 
 
 MyConfig.print_config()
 ```
 > Note: If your type checker complains about check_empty_name, add
 >       `@staticmethod` or `# type: ignore`.
-
 
 ### Pipes
 

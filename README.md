@@ -1,22 +1,24 @@
 # bean.py
 
 ```
-# =========================================================================== #
-#                                                                             #
-#                              ,---.      ,---.                               #
-#                             /     `-<>-'  :D \                              #
-#                             |                |                              #
-#                              . .            .                               #
-#                               `-~~~~~~~~~~-'                                #
-#                                                                             #
-#                            Bean there, done that                            #
-#                          Bean there, debugged that                          #
-#                              May contain nuts                               #
-#                                                                             #
-# =========================================================================== #
+
+
+                               ,---.      ,---.
+                              /     `-<>-'  :D \
+                              |                |
+                               . .            .
+                                `-~~~~~~~~~~-'
+
+                             Bean there, done that
+                           Bean there, debugged that
+                               May contain nuts
+
+
 ```
 
 > Small, fun, dependency-free beans.
+
+---
 
 ## What is `bean`?
 
@@ -97,7 +99,7 @@ python -c "
 From repository root:
 
 ```sh
-./test.sh
+./run_tests.sh
 ```
 
 ## License

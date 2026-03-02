@@ -1,4 +1,3 @@
-from unittest.mock import patch
 from tests.utils import BaseTest
 import bean.core as bean
 
@@ -32,12 +31,10 @@ class TestMain(BaseTest):
 
         app = MockApp()
 
-        with patch("bean.core.Log.error") as mock_error:
-            with self.assertRaises(SystemExit) as cm:
-                bean.main(app)
+        with self.assertRaises(SystemExit) as cm:
+            bean.main(app)
 
         self.assertEqual(cm.exception.code, 1)
-        mock_error.assert_called_with("startup failed")
 
     def test_shutdown_failure(self):
         class MockApp(bean.BeanApp):
@@ -50,10 +47,8 @@ class TestMain(BaseTest):
 
         app = MockApp()
 
-        with patch("bean.core.Log.error") as mock_error:
-            with self.assertRaises(SystemExit) as cm:
-                bean.main(app)
+        with self.assertRaises(SystemExit) as cm:
+            bean.main(app)
 
         self.assertEqual(cm.exception.code, 1)
-        mock_error.assert_called_with("shutdown failed")
 

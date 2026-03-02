@@ -30,8 +30,9 @@ __all__ = [
     "install_signal_handlers", "shutdown_requested",
     "Scheduler",
     "BeanConfig", "ConfigField",
-    "dirExists", "fileExists", "isDate", "isEmail", "isHost", "isIPv4", "isIPv6",
-    "isNegative", "isPort", "isPositive", "isUrl", "nonEmpty", "pathExists",
+    "dirExists", "fileExists", "isDate", "isEmail", "isHost", "isIPv4",
+    "isIPv6", "isNegative", "isPort", "isPositive", "isUrl", "nonEmpty",
+    "pathExists",
     "main",
 ]
 
@@ -41,7 +42,7 @@ __all__ = [
 
 import re, signal, subprocess, sys, atexit
 from abc import ABC, ABCMeta, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -49,7 +50,7 @@ from threading import Event, Thread
 from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
-    List, Dict, Tuple, Iterable, Set,
+    List, Dict, TextIO, Tuple, Iterable, Set,
     Any, TypeVar, Generic, Optional, override
 )
 
@@ -108,29 +109,20 @@ del _BeanMeta
 # -----------------------------------------------------------------------------
 
 def main(app: BeanApp) -> NoReturn:
-    code = 0
-    try:
-        Log.update(
-            name=app.NAME,
-            level=Logger.Level.DEBUG if app.DEBUG else Logger.Level.INFO,
-        )
-        install_signal_handlers()
+    install_signal_handlers()
 
+    try:
         if app.startup() is False:
-            Log.error("startup failed").flush(True)
             sys.exit(1)
 
         code = app.run()
 
     except Exception:
-        Log.exception("fatal error").flush(True)
         raise
 
     finally:
         if app.shutdown() is False:
-            Log.error("shutdown failed").flush(True)
-            sys.exit(1)
-        Log.flush(True)
+            code = 1
 
     sys.exit(code)
 
@@ -152,6 +144,8 @@ class Logger:
     # logger classes & helpers
 
     class Level(Enum):
+        """ Standard log levels with numeric severity and ANSI color codes. """
+
         FATAL = (4, "\033[1;7;91m")
         ERROR = (3, "\033[91m")
         WARN  = (2, "\033[93m")
@@ -167,6 +161,12 @@ class Logger:
         def color(self) -> str:
             return self._color
 
+        # sugar
+
+        @staticmethod
+        def from_debug(debug: bool) -> Logger.Level:
+            return Logger.Level.DEBUG if debug else Logger.Level.INFO
+
     @dataclass
     class Record:
         timestamp: datetime
@@ -178,51 +178,161 @@ class Logger:
         @abstractmethod
         def log(self, record: Logger.Record): ...
         def flush(self): pass
+        def close(self): pass
 
     @staticmethod
     def VoidHandler() -> Logger.Handler:
+
         class VoidHandler(Logger.Handler):
             @override
             def log(self, record: Logger.Record):
                  _ = record  # shut the warn
+            def flush(self): pass
+            def close(self): pass
+
         return VoidHandler()
+
+    @staticmethod
+    def CustomHandler(
+        log: Callable[[Logger.Record], Any],
+        flush: Callable[[], Any] = lambda: ...,
+        close: Callable[[], Any] = lambda: ...,
+    ) -> Logger.Handler:
+
+        class CustomHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._closed = False
+
+            @override
+            def log(self, record: Logger.Record):
+                with self._lock:
+                    if self._closed: return
+                    log(record)
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    if self._closed: return
+                    close()
+                    self._closed = True
+
+        return CustomHandler()
 
     @staticmethod
     def FileHandler(
         path: str,
         fmt_fn: Optional[Callable[[Logger.Record], str]] = None,
     ) -> Logger.Handler:
-        fn = Logger.fmt_basic if fmt_fn is None else fmt_fn
+        fn = Logger.fmt(color=False) if fmt_fn is None else fmt_fn
+
         class FileHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._file = open(path, "a", buffering=1)  # line buffered
+                self._closed = False
+
             @override
             def log(self, record: Logger.Record):
-                with open(path, "a") as f:
-                    f.write(fn(record) + "\n")
+                with self._lock:
+                    if self._closed: return
+                    self._file.write(fn(record) + "\n")
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    self._file.flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    if self._closed: return
+                    self._file.flush()
+                    self._file.close()
+                    self._closed = True
+
         return FileHandler()
 
     @staticmethod
     def TermHandler(
         fmt_fn: Optional[Callable[[Logger.Record], str]] = None,
+        stream: Optional[TextIO] = None,
     ) -> Logger.Handler:
-        fn = Logger.fmt_basic if fmt_fn is None else fmt_fn
+        fn = Logger.fmt() if fmt_fn is None else fmt_fn
+
         class TermHandler(Logger.Handler):
+            def __init__(self):
+                from threading import RLock
+                self._lock = RLock()
+                self._closed = False
+
             @override
             def log(self, record: Logger.Record) -> None:
-                print(fn(record), flush=True)
+                with self._lock:
+                    if self._closed: return
+
+                    if stream is not None:
+                        out = stream
+                    elif record.level in (Logger.Level.DEBUG,
+                                          Logger.Level.INFO):
+                        out = sys.stdout
+                    else:
+                        out = sys.stderr
+
+                    print(fn(record), file=out, flush=True)
+
+            @override
+            def flush(self):
+                with self._lock:
+                    if self._closed: return
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+
+            @override
+            def close(self):
+                with self._lock:
+                    self._closed = True
+
         return TermHandler()
 
     @staticmethod
-    def fmt_basic(record: Record) -> str:
-        return (
-            f"{record.timestamp:%Y-%m-%d %H:%M:%S} | "
-            f"{record.level.name:<5} | "
-            f"{record.logger:<24} | "
-            f"{record.message}"
-        )
+    def fmt(
+        *,
+        color: bool = False,
+        timestamp: bool = True,
+        logger_name: bool = True,
+    ) -> Callable[[Logger.Record], str]:
 
-    @staticmethod
-    def fmt_color(record: Record) -> str:
-        return f"{record.level.color}{Logger.fmt_basic(record)}\033[0m"
+        def fmt(record: Logger.Record) -> str:
+            parts = []
+
+            if timestamp:
+                parts.append(f"{record.timestamp:%Y-%m-%d %H:%M:%S}")
+
+            parts.append(f"{record.level.name:<5}")
+
+            if logger_name:
+                parts.append(f"{record.logger:<24}")
+
+            parts.append(record.message)
+
+            line = " | ".join(parts)
+
+            if color:
+                return f"{record.level.color}{line}\033[0m"
+
+            return line
+
+        return fmt
 
     # Logger
 
@@ -230,36 +340,64 @@ class Logger:
     def __init__(
         self,
         name: str,
+        *,
         level: Level = Level.INFO,
         handlers: Optional[Iterable[Logger.Handler]] = None,
+        parent: Optional[Logger] = None,
     ):
-        self.name: str = name
-        self.level: Logger.Level = level
+        self._name: str = name
+        self._full_name: str
+        self._level: Logger.Level = level
 
-        self._parent: Optional[Logger] = None
+        self._parent: Optional[Logger] = parent
         self._children: List[Logger] = []
 
         self.handlers: List[Logger.Handler] = list(handlers) if handlers else []
-                
+
         Logger._active_loggers.add(self)
 
+        if self._parent is None:
+            self._full_name = self._name
+        else:
+            self._full_name = f"{self._parent._full_name}.{self._name}"
+
     # context manager support
+
     def __enter__(self):
         return self
     def __exit__(self, *_):
-        self.flush()
-        if self._parent: self._parent._children.remove(self)
+        self.close()
+
+        for child in self._children:
+            del child
+
+        if self._parent and self in self._parent._children:
+            self._parent._children.remove(self)
         Logger._active_loggers.discard(self)
+
         return False  # don't suppress exceptions
 
     def __del__(self):
         try: # attempt to flush before object is destroyed
-            self.flush()
-            if self._parent: self._parent._children.remove(self)
+            self.close()
+            if self._parent and self in self._parent._children:
+                self._parent._children.remove(self)
             Logger._active_loggers.discard(self)
         except Exception: pass
 
     # logger gen/set
+
+    @property
+    def name(self) -> str: return self._full_name
+
+    @name.setter
+    def name(self, name: str) -> None: self.set_name(name)
+
+    @property
+    def level(self) -> Level: return self._level
+
+    @level.setter
+    def level(self, value: Level): self.set_level(value)
 
     @property
     def root(self) -> Logger:
@@ -271,6 +409,7 @@ class Logger:
     def child(
         self,
         name: str,
+        *,
         level: Optional[Level] = None,
         handlers: Optional[List[Logger.Handler]] = None,
     ) -> Logger:
@@ -278,29 +417,40 @@ class Logger:
 
         log = Logger(
             name=name,
-            level=level if level is not None else self.level,
+            level=level if level is not None else self._level,
             handlers=handlers + self.handlers,
+            parent=self,
         )
 
-        log._parent = self
         self._children.append(log)
-
         return log
 
     def update(
         self,
         name: Optional[str] = None,
+        *,
         level: Optional[Level] = None,
         handlers: Optional[Logger.Handler|Iterable[Logger.Handler]] = None,
         cascade: bool = True
     ) -> Self:
-        if name is not None:  self.name = name
-        if level is not None: self.set_level(level, cascade)
-        if handlers is not None:  self.add_handlers(handlers, cascade=cascade)
+        if name is not None:     self.set_name(name)
+        if level is not None:    self.set_level(level, cascade)
+        if handlers is not None: self.add_handlers(handlers, cascade=cascade)
+        return self
+
+    def set_name(self, name: str) -> Self:
+        self._name = name
+        if self._parent is None:
+            self._full_name = self._name
+        else:
+            self._full_name = f"{self._parent._full_name}.{self._name}"
+
+        for child in self._children:
+            child.set_name(child._name)
         return self
 
     def set_level(self, level: Level, cascade: bool = True) -> Self:
-        self.level = level
+        self._level = level
         if cascade:
             for child in self._children:
                 child.set_level(level, cascade)
@@ -317,7 +467,7 @@ class Logger:
             self.handlers = list(handlers)
         else:
             self.handlers = [handlers]
-        
+
         if cascade:
             for child in self._children:
                 child.set_handlers(self.handlers, cascade)
@@ -346,20 +496,12 @@ class Logger:
     # log
 
     def _log(self, level: Level, msg: str) -> Self:
-        if level.value < self.level.value: return self
-
-        def logger_path(logger: Logger) -> str:
-            parts = []
-            log = logger
-            while log:
-                parts.append(log.name)
-                log = log._parent
-            return ".".join(reversed(parts))
+        if level.value < self._level.value: return self
 
         record = Logger.Record(
             timestamp=datetime.now(),
             level=level,
-            logger=logger_path(self),
+            logger=self._full_name,
             message=msg,
         )
         for handler in self.handlers: handler.log(record)
@@ -395,15 +537,50 @@ class Logger:
         if cascade:
             for child in self._children:
                 child.flush(cascade=cascade)
-        
+
+        return self
+
+    def close(self, cascade: bool = False) -> Self:
+        for handler in self.handlers:
+            handler.flush()
+
+        self.handlers.clear()  # detach handlers, don't close
+
+        if cascade:
+            for child in self._children:
+                child.close()
+
         return self
 
     @atexit.register
     @staticmethod
-    def flush_all_loggers():
+    def close_all_loggers():
         for log in list(Logger._active_loggers):
-            try: log.flush()
+            try:
+                log.flush()
+                log.close()
             except Exception: pass
+
+    # sugar
+
+    @staticmethod
+    def init(
+        name: str = "bean",
+        level: Logger.Level = Level.INFO,
+        fmt: Optional[Callable[[Logger.Record], str]] = None,
+        handlers: Optional[List[Logger.Handler]] = None,
+    ) -> Logger:
+        """ Initialize root logger. """
+
+        if fmt is None:
+            fmt = Logger.fmt()
+        if handlers is None:
+            handlers = [Logger.TermHandler(fmt)]
+
+        global Log
+
+        Log.update(name, level=level, handlers=handlers)
+        return Log
 
 Log = Logger("bean")
 
@@ -562,10 +739,15 @@ class Predicate(Generic[_T]):
         if log: log.debug(f"check {self.name} -> {res}")
         return res
 
-# Suggar
+# sugar
+
 def predicate(fn: Callable[[_T], bool]) -> Predicate[_T]:
     """ Wrap a predicate into a Obj, enabling logical composition. """
     return Predicate(fn)
+
+# cleanup
+
+del _S, _E, _R, _T
 
 # -----------------------------------------------------------------------------
 # pipes
@@ -900,12 +1082,14 @@ def cat(
 
     return Pipe(foo)
 
+# cleanup
+del _E, _R, _I, _O, _P
+
 # -----------------------------------------------------------------------------
 # signals
 # -----------------------------------------------------------------------------
 
 _shutdown_event = Event()
-_installed = False
 
 def install_signal_handlers(
     cb: Optional[Callable[[int, Any], Any]] = None
@@ -914,9 +1098,8 @@ def install_signal_handlers(
 
     Signals set a shutdown flag that can be checked by the app.
     """
-    global _installed
-    if _installed: return
-    _installed = True
+    if getattr(install_signal_handlers, "_installed", False): return
+    setattr(install_signal_handlers, "_installed", True)
 
     force = False
 
@@ -1008,6 +1191,7 @@ class Scheduler:
         self.tasks: List[Scheduler.Task] = []
 
     # context manager support
+
     def __enter__(self) -> Scheduler:
         return self.start()
 
@@ -1070,31 +1254,85 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-FieldValue = bool|int|float|str|List[str]
+FieldValue = bool|int|float|str|List[str]|Enum
+ConfigSource = Literal[
+    "args", "dict", "env", "ini", "json", "py", "toml",
+] | str
 
 _C = TypeVar("_C", bound="BeanConfig")
+_F = TypeVar("_F", str, int, float, bool, list[str], Enum)
 
 class BeanConfig(ABC):
-    """ Abstract base class for application configuration. """
+    """ Abstract base class for declarative application configuration.
 
-    class _ConfigField(Generic[_T]):
-        def __init__(
-            self,
-            type: type[_T],
-            description: Optional[str] = None,
-            default: Optional[_T] = None,
-            validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
-            required: bool = False,
-        ):
-            self.type = type
-            self.description = description
-            self.default = default
-            self.validator = validator
-            self.required = required
+    `BeanConfig` provides a structured, type-safe configuration system based
+      on declarative field specifications.
 
-        def __set_name__(self, _, name): self._name = name
+    Subclasses define configuration schema via `_ConfigField` declarations.
+    The framework handles:
 
-        def __get__(self, instance, owner) -> _T:
+        - Loading values from one or multiple sources (`json`, `env`, ...)
+        - Type enforcement
+        - Default resolution
+        - Field-level normalization
+        - Field-level validation
+        - Class-level validation (with inheritance support)
+        - CLI flag integration (if enabled)
+    """
+
+    @dataclass
+    class _ConfigField(Generic[_F]):
+        """ Declarative specification of a single configuration field.
+
+        It is purely declarative and contains no runtime state.
+        Runtime values are stored separately by the config loader.
+
+        Lifecycle of a field value:
+
+            1. Raw value is provided (cli, env, ...).
+            2. Value is casted (if necessary).
+            3. Default is applied (if necessary).
+            4. Type is validated.
+            5. `normalizer` is applied (if defined).
+            6. `validator` is executed (if defined).
+            7. Class-level validators run afterwards (if defined).
+
+        @type:          Values must fall under type after config build
+        @required:      If True, the field must be explicitly provided (cannot
+                        rely on default)
+        @default:       Optional default value applied when no value is provided
+        @description:   Optional human-readable description
+        @normalizer:    Optional transformation function applied before
+                        validation. Intended for canonicalization (e.g. strip
+                        strings, expand paths, ...)
+        @validator:     Optional field-level validation function
+        @long_flag:     Optional CLI long flag (e.g. "--port")
+        @short_flag:    Optional CLI short flag (e.g. "-p")
+        @shadow:        Optional set of sources the field can not be set
+        """
+
+        type: type[_F]
+        description: Optional[str] = None
+        required: bool = False
+        default: Optional[_F] = None
+        validator: Optional[Callable[[_F], bool]] = None
+        normalizer: Optional[Callable[[_F], _F]] = None
+        long_flag: Optional[str] = None
+        short_flag: Optional[str] = None
+        shadow: set[str] = field(default_factory=set)
+
+        def __post_init__(self):
+            if isinstance(self.shadow, Iterable):
+                self.shadow = set(self.shadow)
+
+        def __set_name__(self, owner, name):
+            self._name = name
+            if self.default is None and not self.required:
+                raise TypeError(
+                    f"Unbound ConfigField, '{owner.__name__}.{self._name}' has no default and is not required"
+                )
+
+        def __get__(self, instance, owner) -> _F:
             """ HACK!!!
             Descriptor access logic.
 
@@ -1130,8 +1368,43 @@ class BeanConfig(ABC):
                 return self     # type: ignore  # before build -> schema
             return inst.__dict__[self._name]    # after build  -> value
 
+        def cast_val(self, val: Any) -> Optional[Any]:
+            exp_t = self.type
+            if isinstance(val, exp_t): return val
+
+            try:
+                if exp_t is bool:
+                    if not isinstance(val, str): return bool(val)
+                    v = val.lower()
+                    if v in ("1", "true", "yes", "on"):  return True
+                    if v in ("0", "false", "no", "off"): return False
+                    return None
+
+                if exp_t is int:    return int(val)
+                if exp_t is float:  return float(val)
+                if exp_t is str:    return str(val)
+
+                if exp_t is list:
+                    if not isinstance(val, str): return [val] # Type error?
+                    return [x.strip() for x in val.split(",")]
+
+                # Note: If an Enum name doesn't match, instead of raising a
+                #       clean `ValueError`, it will cause a `TypeError` because
+                #       on failure the raw value is returned. After all sources
+                #       are loaded, it is then validated against the field type.
+                if issubclass(exp_t, Enum) and isinstance(val, str):
+                    v = val.lower()
+                    for member in exp_t:
+                        if member.name.lower() == v:
+                            return member
+
+            except Exception: pass
+            return None
+
     _instance: ClassVar["BeanConfig | None"] = None
     _spec: ClassVar[Dict[str, _ConfigField]] = {}
+    # allow override `{ FIELD_NAME: { FN_NAME: fn, ... }, ... }`
+    _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
 
     def __init_subclass__(cls, **kwargs):
         """ Build the immutable schema `_spec` at class definition time.
@@ -1150,15 +1423,26 @@ class BeanConfig(ABC):
 
         cls._spec = fields
 
-    @staticmethod
+    @classmethod
     def validate(
-        field_name: str
-    ) -> Callable[[Callable[[_T], bool]], Callable[[_T], bool]]:
+        cls,
+        *keys: str
+    ) -> Callable[[Callable[[_F], bool]], Callable[[_F], bool]]:
         """ decorator to make custom validators on function definition """
-        def wrapper(fn: Callable[[_T], bool]) -> Callable[[_T], bool]:
-            setattr(fn, "_validate_field", field_name)
+
+        def decorator(fn: Callable[[_F], bool]) -> Callable[[_F], bool]:
+            orig_fn = getattr(fn, "__func__", fn) # unwrap staticmethod
+            name = str(orig_fn.__name__)
+
+            # allow override `cls.validators[FIELD_NAME][FN]`
+            for key in keys:
+                cls._global_validators.setdefault(
+                    key,
+                    {}
+                )[name] = orig_fn # type: ignore
             return fn
-        return wrapper
+
+        return decorator
 
     @classmethod
     def _set_instance(cls, obj: BeanConfig):
@@ -1169,29 +1453,20 @@ class BeanConfig(ABC):
         return cls._spec
 
     @classmethod
-    def load(cls: type[_C]) -> BeanConfig._ConfigLoader[_C]:
-        return BeanConfig._ConfigLoader(cls)
+    def spec_for(cls, source: ConfigSource) -> Dict[str, _ConfigField]:
+        return {
+            k: f
+            for k, f in cls._spec.items()
+            if source not in f.shadow
+        }
 
     @classmethod
-    def cli_help(cls):
-        import argparse
-
-        def to_cli(key: str) -> str:
-            return f"--{key.replace('_', '-').lower()}"
-
-        parser = argparse.ArgumentParser()
-        for k, f in cls.spec().items():
-            arg_key = to_cli(k)
-            t = f.type if f.type != list else str   # lists parsed from str
-            parser.add_argument(
-                arg_key,
-                dest=k,
-                type=t,
-                default=f.default,
-                help=f.description,
-                required=f.required,
-            )
-        parser.print_help()
+    def load(
+        cls: type[_C],
+        strict: bool = False,
+        logger: Optional[Logger] = None,
+    ) -> BeanConfig._ConfigLoader[_C]:
+        return BeanConfig._ConfigLoader(cls, strict, logger)
 
     @classmethod
     def print_config(
@@ -1233,48 +1508,99 @@ class BeanConfig(ABC):
         and generating a final config as a product
         """
 
-        def __init__(self, config_cls: type[_C]):
+        def __init__(
+            self,
+            config_cls: type[_C],
+            strict: bool = False,
+            log: Optional[Logger] = None,
+        ):
             self.config_cls = config_cls
             self._values: Dict[str, Any] = {}
             self._locked = False
+            self.strict = strict
+
+            if log is not None: self.log = log
+            else: self.log = Logger("dummy", handlers=[Logger.VoidHandler()])
 
         # post config steps
 
         def validate(self) -> BeanConfig._ConfigLoader[_C]:
             """ validate current config """
-            import inspect
 
+            errors = []
             spec = self.config_cls.spec()
-            # default and normal validators
+
+            # field-level
+
             for k, f in spec.items():
                 val = self._values.get(k, None)
 
+                # default / required
                 if val is None:
-                    if f.default is not None:
-                        val = f.default
-                    elif f.required:
-                        raise ValueError(f"Missing required config: {k}")
+                    if f.required:
+                        errors.append(ValueError(
+                            f"Missing required config: {k}"))
+                        continue
 
-                elif not isinstance(val, f.type):
-                    raise TypeError(f"Invalid type '{type(val).__name__}' for value {k} ({val})")
+                    assert f.default is not None # already asserted at init
+                    val = f.default
 
-                elif f.validator and not f.validator(val):
-                    raise ValueError(f"Invalid value for {k}: {val}")
+                # type check
+                if not isinstance(val, f.type):
+                    errors.append(TypeError(
+                        f"Invalid type '{type(val).__name__}' for value {k} ({val})"))
+                    continue
+
+                # normalize
+                if f.normalizer is not None: val = f.normalizer(val)
+
+
+                # field-level validator
+                if f.validator and not f.validator(val):
+                    errors.append(ValueError(f"Invalid value for {k}: {val}"))
+                    continue
 
                 self._values[k] = val
 
-            # class-level per-field validators
-            for name, method in inspect.getmembers(self.config_cls,
-                                                   predicate=callable):
-                field: Optional[str] = getattr(method, "_validate_field", None)
-                if field is None: continue
+            if errors: raise ExceptionGroup("Config validation errors", errors)
 
+            # class-level per-field validators
+
+            def collect_validators(
+            ) -> Dict[str, Dict[str, Callable[[FieldValue], bool]]]:
+                """Dynamically collect validators via MRO."""
+                validators = {}
+
+                for base in reversed(self.config_cls.__mro__):
+                    base_v = getattr(base, "_global_validators", None)
+                    if not base_v: continue
+
+                    for key, d in base_v.items():
+                        validators.setdefault(key, {}).update(d)
+
+                return validators
+
+            for field, d in collect_validators().items():
                 if field not in spec:
-                    raise KeyError(f"Class-level validator '{name}' key '{field}' is not in spec")
+                    fmt = f"Class-level validator '%s' key '{field}' is not in spec"
+                    errors.extend(
+                        KeyError(fmt % name)
+                        for name in d.keys()
+                    )
+                    continue
 
                 val = self._values.get(field, None)
-                if val is not None and not method(val):
-                    raise ValueError(f"Class-level validation failed for {field}: {name}({val})")
+                assert val is not None
+
+                fmt = f"Class-level validation failed for {field}: %s({val})"
+
+                errors.extend(
+                    ValueError(fmt % name)
+                    for name, method in d.items()
+                    if not method(val)
+                )
+
+            if errors: raise ExceptionGroup("Config validation errors", errors)
 
             return self
 
@@ -1283,7 +1609,8 @@ class BeanConfig(ABC):
             obj = self.validate().config_cls()
 
             # Note: we override the instance attr not the class attributes
-            for k, v in self._values.items(): setattr(obj, k, v)
+            for k, v in self._values.items():
+                setattr(obj, k, v)
 
             self.config_cls._set_instance(obj)
             return obj
@@ -1301,45 +1628,11 @@ class BeanConfig(ABC):
                 return self._values[name]
             raise AttributeError(name)
 
-        # helpers
-
-        @staticmethod
-        def _cast_type(val: Any, field: BeanConfig._ConfigField):
-            """ Casts value to match the expected field type"""
-            if val is None: return None
-
-            t = field.type
-            if isinstance(val, t): return val
-
-            try:
-                if t is bool:
-                    if not isinstance(val, str): return bool(val)
-                    v = val.lower()
-                    if v in ("1", "true", "yes", "on"): return True
-                    if v in ("0", "false", "no", "off"): return False
-                    return None
-
-                if t is int:    return int(val)
-                if t is float:  return float(val)
-                if t is str:    return str(val)
-
-                if t is list:
-                    if not isinstance(val, str): return [val] # Type error?
-                    return [x.strip() for x in val.split(",")]
-
-            except Exception: pass
-            return val
-
-        @staticmethod
-        def _file_exists(path: str) -> bool:
-            conf_path = Path(path)
-            return conf_path.exists() and conf_path.is_file()
-
         # source loaders
 
-        def _load_source(
+        def _from_source(
             self,
-            source: str,
+            source: ConfigSource,
             data: Dict[str, Any],
             key_mapper: Callable[[str], str] = lambda k: k
         ) -> Self:
@@ -1351,30 +1644,49 @@ class BeanConfig(ABC):
             - key_mapper: function to normalize source keys to config keys
             """
 
-            spec = self.config_cls.spec()
+            errors = []
+
+            spec = self.config_cls.spec_for(source)
             for raw_key, raw_val in data.items():
                 key = key_mapper(raw_key)
+
                 if key not in spec:
-                    Log.debug(f"unknown key '{raw_key}' in config from '{source}'")
+                    msg = f"unknown key '{raw_key}' in config from '{source}'"
+                    if self.strict: errors.append(KeyError(msg))
+                    else: self.log.warning(msg)
                     continue
 
-                val = BeanConfig._ConfigLoader._cast_type(raw_val, spec[key])
-                if val is None:
-                    Log.warning(f"Invalid value for {raw_key} ({raw_val}) from '{source}', skipping...")
+                # Note: auto-skip unset values (`None`). Useful for `from_args`
+                #       so missing flags don't raise errors.
+                #
+                #       For other sources, this might silently mask config
+                #       entries. `( '-')`
+                if raw_val is None:
                     continue
+
+                val = spec[key].cast_val(raw_val)
+                if val is None:
+                    errors.append(ValueError(
+                        f"Invalid value for {raw_key} ({raw_val}) from '{source}'"))
+                    continue
+
                 self._values[key] = val
+
+            if errors:
+                raise ExceptionGroup("Config load errors", errors)
 
             return self
 
-        def load_dict(self, d: Dict) -> Self:
-            return self._load_source("dict", d)
+        def from_dict(self, d: Dict) -> Self:
+            return self._from_source("dict", d)
 
-        def load_json(
+        def from_json(
             self,
             path: str,
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1382,51 +1694,71 @@ class BeanConfig(ABC):
             with open(path) as f:
                 data = json.load(f)
 
-            return self._load_source(path, data,
+            return self._from_source(path, data,
                                     lambda k: k.upper().replace("-", "_"))
 
-        def load_args(self, args: Optional[list[str]] = None) -> Self:
+        def from_args(self, args: Optional[list[str]] = None) -> Self:
             import argparse
 
             def to_cli(key: str) -> str:
-                return f"--{key.replace('_', '-').lower()}"
+                return f"{key.replace('_', '-').lower()}"
 
             parser = argparse.ArgumentParser()
-            spec = self.config_cls.spec()
+            spec = self.config_cls.spec_for("args")
             for k, f in spec.items():
-                arg_key = to_cli(k)
-                t = f.type if f.type != list else str   # lists parsed from str
-                parser.add_argument(
-                    arg_key,
+                flags = []
+
+                # Note: we don't mangle user flags
+                if f.long_flag is not None:  flags.append(f.long_flag)
+                else:                        flags.append(f"--{to_cli(k)}")
+                if f.short_flag is not None: flags.append(f.short_flag)
+
+                kwargs: Dict[str, Any] = dict(
                     dest=k,             # store as spec key
-                    type=t,
                     default=None,       # if set it will mask values
-                    help=f.description
+                    help=f.description,
                 )
 
-            parsed = parser.parse_args(args)
-            return self._load_source("args", vars(parsed))
+                if f.type is bool:
+                    if f.default is not None:
+                        if f.default:   kwargs["action"] = "store_false"
+                        else:           kwargs["action"] = "store_true"
 
-        def load_env(self, prefix: str = "") -> Self:
+                elif f.type is list:
+                    kwargs["type"] = str  # lists parsed from str
+
+                elif issubclass(f.type, Enum):
+                    kwargs["type"] = str
+                    kwargs["choices"] = [m.name for m in f.type]
+
+                else:
+                    kwargs["type"] = f.type
+
+                parser.add_argument(*flags, **kwargs)
+
+            parsed = parser.parse_args(args)
+            return self._from_source("args", vars(parsed))
+
+        def from_env(self, prefix: str = "") -> Self:
             import os
 
             def normalize_keys(items):
                 return { k.removeprefix(prefix).upper(): v for k, v in items }
 
-            spec = self.config_cls.spec()
-            return self._load_source("env", {
+            spec = self.config_cls.spec_for("env")
+            return self._from_source("env", {
                     k: v
                     for k, v in normalize_keys(os.environ.items()).items()
                     if k in spec
                 })
 
-        def load_py(
+        def from_py(
             self,
             path: str,
             symbol: str = "Config",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1437,28 +1769,29 @@ class BeanConfig(ABC):
 
             mod = IU.module_from_spec(spec)
             spec.loader.exec_module(mod)
-            if not hasattr(mod, symbol):
+            obj = getattr(mod, symbol, None)
+
+            if obj is None:
                 raise ValueError(f"Python config must expose `{symbol}` object")
 
-            obj = getattr(mod, symbol)
             if isinstance(obj, dict):
-                return self._load_source(path, obj)
+                return self._from_source(path, obj)
 
             data = {
                 k: getattr(obj, k)
-                for k, _ in self.config_cls.spec().items()
-                if not k.startswith("_")
+                for k, _ in self.config_cls.spec_for("py").items()
+                if not k.startswith("_") and hasattr(obj, k)
             }
 
-            return self._load_source(path, data)
+            return self._from_source(path, data)
 
-        def load_toml(
+        def from_toml(
             self,
             path: str,
             root: str = "app",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1478,15 +1811,15 @@ class BeanConfig(ABC):
             with open(path, "rb") as f:
                 data = tomllib.load(f).get(root, {})
 
-            return self._load_source(path, flatten_toml(data))
+            return self._from_source(path, flatten_toml(data))
 
-        def load_ini(
+        def from_ini(
             self,
             path: str,
             section: str = "app",
             force: bool = False
         ) -> Self:
-            if not BeanConfig._ConfigLoader._file_exists(path):
+            if not fileExists(path):
                 if force: raise FileNotFoundError(f"File '{path}' not found.")
                 return self
 
@@ -1508,21 +1841,46 @@ class BeanConfig(ABC):
                 prefix = f"{section}_".upper()
                 return { k.removeprefix(prefix): v for k, v in out.items() }
 
-            return self._load_source(path, flatten_ini())
+            return self._from_source(path, flatten_ini())
 
-# suggar
+# sugar
+
 def ConfigField(
-        type: type[_T],
+        type: type[_F],
+        *,
         description: Optional[str] = None,
-        default: Optional[_T] = None,
-        validator: Optional[Predicate[_T]|Callable[[_T], bool]] = None,
-        required: bool = False,
-    ) -> _T:
-    return BeanConfig._ConfigField(type, description, default,
-                                   validator, required) # type: ignore
+        required: Optional[bool] = None,
+        default: Optional[_F] = None,
+        normalizer: Optional[Callable[[_F], _F]] = None,
+        validator: Optional[Predicate[_F]|Callable[[_F], bool]] = None,
+        long_flag: Optional[str] = None,
+        short_flag: Optional[str] = None,
+        shadow: Optional[Iterable[str]] = None,
+    ) -> _F:
+    """ Sugar to declare a BeanConfig fields.
+
+    This wraps `BeanConfig._ConfigField` and auto-infers `required` if not
+    provided:
+        - If `default` is None and `required` is not explicitly set, the field
+          becomes required.
+        - Otherwise, `required` is set to `False`.
+    """
+    if required is None: required = default is None
+    return BeanConfig._ConfigField(
+        type,
+        description=description,
+        required=required,
+        default=default,
+        normalizer=normalizer,
+        validator=validator,
+        long_flag=long_flag,
+        short_flag=short_flag,
+        shadow=set(shadow) if shadow is not None else set(),
+    ) # type: ignore
 
 # cleanup
-del _S, _E, _R, _T, _I, _O, _C, _P
+
+del _F, _C
 
 # -----------------------------------------------------------------------------
 # config validators
