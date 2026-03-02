@@ -13,7 +13,7 @@
 # =========================================================================== #
 
 __version__ = "0.2.0"
-__doc__     = "tiny framework for bootstrapping apps"
+__doc__     = "Tiny framework for bootstrapping apps"
 __author__  = "numen-0"
 __license__ = "MIT"
 
@@ -275,6 +275,7 @@ class Logger:
     def fmt(
         *,
         color: bool = False,
+        level: bool = True,
         timestamp: bool = True,
         logger_name: bool = True,
     ) -> Callable[[Logger.Record], str]:
@@ -285,7 +286,8 @@ class Logger:
             if timestamp:
                 parts.append(f"{record.timestamp:%Y-%m-%d %H:%M:%S}")
 
-            parts.append(f"{record.level.name:<5}")
+            if level:
+                parts.append(f"{record.level.name:<5}")
 
             if logger_name:
                 parts.append(f"{record.logger:<24}")
