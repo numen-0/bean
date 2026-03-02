@@ -41,7 +41,7 @@ __all__ = [
 # -----------------------------------------------------------------------------
 
 import re, signal, subprocess, sys, atexit
-from abc import ABC, ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -58,42 +58,11 @@ from typing import (
 # app
 # -----------------------------------------------------------------------------
 
-class _BeanMeta(ABCMeta):
-    _initialized = False
-    _guarded = { "NAME", "DEBUG" }
-
-    def __getattribute__(cls, name):
-        if (name in type.__getattribute__(cls, "_guarded")
-            and not type.__getattribute__(cls, "_initialized")):
-            raise RuntimeError(
-                f"{cls.__name__} must be initialized before accessing '{name}'")
-        return super().__getattribute__(name)
-
-class BeanApp(ABC, metaclass=_BeanMeta):
+class BeanApp(ABC):
     """ Bean module global config """
 
-    NAME : str
-    DEBUG : bool
-
-    def __init__(
-        self,
-        name: str = "bean-app",
-        debug: bool = False,
-    ):
-        if BeanApp._initialized:
-            raise RuntimeError("BeanApp already initialized")
-
-        BeanApp._initialized = True
-        BeanApp.NAME = name
-        BeanApp.DEBUG = debug
-
-    def __getattribute__(self, name: str) -> Any:
-        cls = type(self)
-        if name in cls._guarded and not cls._initialized:
-            raise RuntimeError(
-                f"{cls.__name__} must be initialized before accessing '{name}'"
-            )
-        return super().__getattribute__(name)
+    def __init__(self, name: str = "bean-app"):
+        BeanApp.name: str = name
 
     def startup(self) -> Optional[bool]: ...
 
@@ -101,8 +70,6 @@ class BeanApp(ABC, metaclass=_BeanMeta):
 
     @abstractmethod
     def run(self) -> int: ...
-
-del _BeanMeta
 
 # -----------------------------------------------------------------------------
 # main

@@ -68,7 +68,8 @@ from bean.core import BeanApp, Log, Logger, main, shutdown_requested
 class App(BeanApp):
     def startup(self):
         Log.init(
-            level=Logger.Level.from_debug(self.DEBUG),
+            self.name,
+            level=Logger.Level.from_debug(True),
             handlers=[Logger.TermHandler(Logger.fmt(color=True))]
         )
         Log.debug("starting...")
@@ -85,7 +86,7 @@ class App(BeanApp):
         return 0
 
 if __name__ == "__main__":
-    main(App("bean-app", debug=True))
+    main(App("bean-app"))
 ```
 
 ### Config

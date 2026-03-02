@@ -12,7 +12,7 @@ class TestLogging(BaseTest):
         Log = Logger("test-logger")
 
     def test_logging_capture(self):
-        DummyApp(name="test-app", debug=True)
+        DummyApp(name="test-app")
 
         # Initialize logger with custom name and debug
         logger = Log.child("test")
@@ -28,7 +28,7 @@ class TestLogging(BaseTest):
         self.assertEqual(child.handlers, logger.handlers)
 
     def test_logger_name_and_level(self):
-        DummyApp(name="test-app", debug=True)
+        DummyApp(name="test-app")
 
         # Initialize logger with custom name and debug
         logger = Log.child("test")
