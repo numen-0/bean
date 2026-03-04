@@ -51,7 +51,7 @@ from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
     List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, TypeVar, Generic, Optional, override
+    Any, Optional, override
 )
 
 # -----------------------------------------------------------------------------
@@ -59,10 +59,10 @@ from typing import (
 # -----------------------------------------------------------------------------
 
 class BeanApp(ABC):
-    """ Bean module global config """
+    """ Abstract base class for a Bean application. """
 
     def __init__(self, name: str = "bean-app"):
-        BeanApp.name: str = name
+        self.name: str = name
 
     def startup(self) -> Optional[bool]: ...
 
@@ -557,28 +557,24 @@ Log = Logger("bean")
 # type classes
 # -----------------------------------------------------------------------------
 
-_S = TypeVar("_S")  # Success type
-_E = TypeVar("_E")  # Error type
-_R = TypeVar("_R")  # Remap type for maps
-
 @dataclass(frozen=True)
-class Result(Generic[_S, _E]):
+class Result[S, E]:
     ok: bool = False
-    value: Optional[_S] = None
-    error: Optional[_E] = None
+    value: Optional[S] = None
+    error: Optional[E] = None
 
     # constructors
 
     @staticmethod
-    def Ok(value: _S) -> Result[_S, _E]:
+    def Ok(value: S) -> Result[S, E]:
         return Result(value=value, ok=True)
 
     @staticmethod
-    def Error(error: _E) -> Result[_S, _E]:
+    def Error(error: E) -> Result[S, E]:
         return Result(error=error, ok=False)
 
     @staticmethod
-    def from_tuple(t: Tuple[_S, bool]) -> Result[_S, _S]:
+    def from_tuple(t: Tuple[S, bool]) -> Result[S, S]:
         """
         Convert a (value, ok) tuple into a Result.
         error is used if ok == False
@@ -601,39 +597,37 @@ class Result(Generic[_S, _E]):
             return self.value == other.value and self.ok == other.ok
         return NotImplemented
 
-    def to_success(self) -> Success[_S|_E]:
+    def to_success(self) -> Success[S|E]:
         return Success.from_tuple(self.to_tuple())
-    def to_tuple(self) -> Tuple[_S, Literal[True]]|Tuple[_E, Literal[False]]:
+    def to_tuple(self) -> Tuple[S, Literal[True]]|Tuple[E, Literal[False]]:
         if self.ok: return (self.value, True) # type: ignore
         return (self.error, False) # type: ignore
 
-    def unwrap(self) -> _S:
+    def unwrap(self) -> S:
         """ Return the value. Raise exception if has no `.value` """
         if not self.ok:
             raise RuntimeError(f"Unwrapped error Result: {self.error}")
         return self.value # type: ignore
 
-    def unwrap_or(self, default: _S) -> _S:
+    def unwrap_or(self, default: S) -> S:
         """ Return the value if ok, else return default. """
         if not self.ok: return default
         return self.value # type: ignore
 
-    def unwrap_err(self) -> _E:
+    def unwrap_err(self) -> E:
         """ Return the error. Raise exception if has no `.value` """
         if self.ok: raise RuntimeError(f"Result has no error")
         return self.error # type: ignore
 
-_T = TypeVar("_T")  # Generic type
-
 @dataclass(frozen=True)
-class Success(Generic[_T]):
-    value: _T
+class Success[T]:
+    value: T
     ok: bool
 
     # constructors
 
     @staticmethod
-    def Ok(value: _T) -> Success[_T]:
+    def Ok(value: T) -> Success[T]:
         if value is None:
             raise TypeError("Success.Ok cannot hold None")
         return Success(value=value, ok=True)
@@ -643,7 +637,7 @@ class Success(Generic[_T]):
         return Success(value=None, ok=False)
 
     @staticmethod
-    def from_tuple(t: Tuple[_T, bool]) -> Success[_T]:
+    def from_tuple(t: Tuple[T, bool]) -> Success[T]:
         """
         Convert a (value, ok) tuple into a Success.
         Ignores the value if ok==False
@@ -651,7 +645,7 @@ class Success(Generic[_T]):
         return Success(*t)
 
     @staticmethod
-    def from_obj(obj: Tuple[_T, bool]|Success[_T]) -> Success[_T]:
+    def from_obj(obj: Tuple[T, bool]|Success[T]) -> Success[T]:
         if not isinstance(obj, Success):
             return Success.from_tuple(obj)
         return Success(obj.value, obj.ok)
@@ -669,32 +663,32 @@ class Success(Generic[_T]):
             return self.value == other.value and self.ok == other.ok
         return NotImplemented
 
-    def to_result(self) -> Result[_T, _T]:
+    def to_result(self) -> Result[T, T]:
         return Result.from_tuple(self.to_tuple())
-    def to_tuple(self) -> Tuple[_T, bool]:
+    def to_tuple(self) -> Tuple[T, bool]:
         return (self.value, self.ok)
 
-class Predicate(Generic[_T]):
-    def __init__(self, fn: Callable[[_T], bool], name: str | None = None):
+class Predicate[T]:
+    def __init__(self, fn: Callable[[T], bool], name: str | None = None):
         self.fn = fn
         self.name = name or fn.__name__
 
-    def __call__(self, value: _T) -> bool:
+    def __call__(self, value: T) -> bool:
         return bool(self.fn(value))
 
-    def __and__(self, other: Predicate[_T]) -> Predicate[_T]:
+    def __and__(self, other: Predicate[T]) -> Predicate[T]:
         return Predicate(
             lambda v: self(v) and other(v),
             name=f"({self.name} & {other.name})"
         )
 
-    def __or__(self, other: Predicate[_T]) -> Predicate[_T]:
+    def __or__(self, other: Predicate[T]) -> Predicate[T]:
         return Predicate(
             lambda v: self(v) or other(v),
             name=f"({self.name} | {other.name})"
         )
 
-    def __invert__(self) -> Predicate[_T]:
+    def __invert__(self) -> Predicate[T]:
         return Predicate(
             lambda v: not self(v),
             name=f"(!{self.name})"
@@ -703,34 +697,24 @@ class Predicate(Generic[_T]):
     def __repr__(self):
         return f"<Predicate {self.name}>"
 
-    def trace(self, value: _T, log=None) -> bool:
+    def trace(self, value: T, log=None) -> bool:
         res = self(value)
         if log: log.debug(f"check {self.name} -> {res}")
         return res
 
 # sugar
 
-def predicate(fn: Callable[[_T], bool]) -> Predicate[_T]:
+def predicate[T](fn: Callable[[T], bool]) -> Predicate[T]:
     """ Wrap a predicate into a Obj, enabling logical composition. """
     return Predicate(fn)
-
-# cleanup
-
-del _S, _E, _R, _T
 
 # -----------------------------------------------------------------------------
 # pipes
 # -----------------------------------------------------------------------------
 
-_I = TypeVar("_I") # Input type
-_O = TypeVar("_O") # Output type
-_R = TypeVar("_R") # Result type
-_E = TypeVar("_E") # Error type
-_P = TypeVar("_P") # Pipe result
+type PipeResult[T] = Success[T] | Tuple[T, bool]
 
-PipeResult = Success[_P] | tuple[_P, bool]
-
-class Pipe(Generic[_I, _O]):
+class Pipe[I, O]:
     """ A composable transformation pipeline.
 
     - Each pipe stage receives a value and returns a `Success[O]` or a
@@ -750,33 +734,33 @@ class Pipe(Generic[_I, _O]):
 
     def __init__(
         self,
-        fn: Callable[[_I], PipeResult[_O]] = lambda v: Success.Ok(v)
+        fn: Callable[[I], PipeResult[O]] = lambda v: Success.Ok(v)
     ):
         self._fn = fn
 
-    def __call__(self, value: _I) -> Success[_O]:
+    def __call__(self, value: I) -> Success[O]:
         return Success.from_obj(self._fn(value))
 
-    def __or__(
+    def __or__[R](
         self,
-        other: Callable[[_O], PipeResult[_R]]
-    ) -> Pipe[_I, _R]:
+        other: Callable[[O], PipeResult[R]]
+    ) -> Pipe[I, R]:
         if not isinstance(other, Pipe):
             other = Pipe(other)
 
-        def join(value: _I) -> Success[_R]:
+        def join(value: I) -> Success[R]:
             res = self(value)
             if res.ok: res = other(res.value)
             return res # type: ignore
 
         return Pipe(join)
 
-    def retry(
+    def retry[R](
         self,
-        fn: Callable[[_O], PipeResult[_R]],
+        fn: Callable[[O], PipeResult[R]],
         attempts: int = 3,
         delay: float = 0.5,
-    ) -> Pipe[_I, _R]:
+    ) -> Pipe[I, R]:
         """ Wrap a pipe-compatible function with retry logic.
 
         The returned function will call `fn` up to `attempts` times, sleeping
@@ -789,7 +773,7 @@ class Pipe(Generic[_I, _O]):
         """
         assert 0 < attempts
 
-        def foo(value: _O) -> Success[_R]:
+        def foo(value: O) -> Success[R]:
             res = None
             for _ in range(attempts):
                 res = Success.from_obj(fn(value))
@@ -801,28 +785,28 @@ class Pipe(Generic[_I, _O]):
 
         return self | Pipe(foo)
 
-    def map(
+    def map[R](
         self,
-        fn: Callable[[_O], _R],
-    ) -> Pipe[_I, _R]:
+        fn: Callable[[O], R],
+    ) -> Pipe[I, R]:
         """ Lift a pure function into a pipe-compatible function.
 
         Returns: `(fn(value), True)`
         """
-        def foo(value: _O): return Success.Ok(fn(value))
+        def foo(value: O): return Success.Ok(fn(value))
         return self | Pipe(foo)
 
     def guard(
         self,
-        fn: Callable[[_O], bool],
-    ) -> Pipe[_I, _O]:
+        fn: Callable[[O], bool],
+    ) -> Pipe[I, O]:
         """ Validate a value inside a pipe.
 
         Returns:
           - `(value, True)`  if guard passes (`fn(value) == True`)
           - `(value, False)` if guard fails
         """
-        def foo(value: _O) -> Success[_O]:
+        def foo(value: O) -> Success[O]:
             if fn(value): return Success.Ok(value)
             return Success(value, False)
 
@@ -830,25 +814,25 @@ class Pipe(Generic[_I, _O]):
 
     def peek(
         self,
-        fn: Callable[[_O], Any],
-    ) -> Pipe[_I, _O]:
+        fn: Callable[[O], Any],
+    ) -> Pipe[I, O]:
         """ Execute a side-effect without modifying the value.
 
         Commonly used for logging, metrics, or debugging.
 
         Returns: `(value, True)`
         """
-        def foo(value: _O):
+        def foo(value: O):
             fn(value)
             return Success.Ok(value)
 
         return self | Pipe(foo)
 
-    def fallback(
+    def fallback[R, E](
         self,
-        fn: Callable[[_O], PipeResult[_R]],
-        fb: _E
-    ) -> Pipe[_I, _R|_E]:
+        fn: Callable[[O], PipeResult[R]],
+        fb: E
+    ) -> Pipe[I, R|E]:
         """ Convert a failing function into a successful one with a fallback.
 
         Useful for optional steps that should not stop the pipe.
@@ -857,18 +841,18 @@ class Pipe(Generic[_I, _O]):
           - `(value,    True)` if fn passes
           - `(fb_value, True)` if fn fails
         """
-        def foo(value: _O):
+        def foo(value: O):
             res = Success.from_obj(fn(value))
             return Success.Ok(res.value if res.ok else fb)
 
         return self | Pipe(foo)
 
-    def branch(
+    def branch[R, E](
         self,
-        cond_fn: Callable[[_O], bool],
-        success_fn: Optional[Callable[[_O], PipeResult[_R]]] = None,
-        fail_fn: Optional[Callable[[_O], PipeResult[_E]]] = None,
-    ) -> Pipe[_I, _O|_R|_E]:
+        cond_fn: Callable[[O], bool],
+        success_fn: Optional[Callable[[O], PipeResult[R]]] = None,
+        fail_fn: Optional[Callable[[O], PipeResult[E]]] = None,
+    ) -> Pipe[I, O|R|E]:
         """ Conditional branching inside a pipe.
 
         If the selected branch function is None, the value is passed through
@@ -879,7 +863,7 @@ class Pipe(Generic[_I, _O]):
           - `(s_value, bool)` if `cond_fn` passes and `success_fn` is provided
           - `(f_value, bool)` if `cond_fn` fails and `fail_fn` is provided
         """
-        def foo(value: _O) -> Success[_O|_R|_E]:
+        def foo(value: O) -> Success[O|R|E]:
             cond = cond_fn(value)
             if cond and success_fn is not None:
                 return Success.from_obj(success_fn(value))
@@ -891,17 +875,17 @@ class Pipe(Generic[_I, _O]):
 
     def trigger(
         self,
-        fn: Callable[[_O], bool],
+        fn: Callable[[O], bool],
         ex: type[Exception] = Exception,
         msg: Optional[str] = None
-    ) -> Pipe[_I, _O]:
+    ) -> Pipe[I, O]:
         """ Validate a value inside a pipe.
 
         Returns:
           - raise `ex(msg)` if trigger passes  (`fn(value) == True`)
           - `(value, True)` if trigger fails
         """
-        def foo(value: _O) -> Success[_O]:
+        def foo(value: O) -> Success[O]:
             if fn(value):
                 raise ex(msg or f"Pipe trigger activated on value: {value}")
             return Success.Ok(value)
@@ -1050,9 +1034,6 @@ def cat(
         return Success(Cmd.Result(int(not ok), output, ""), ok)
 
     return Pipe(foo)
-
-# cleanup
-del _E, _R, _I, _O, _P
 
 # -----------------------------------------------------------------------------
 # signals
@@ -1223,13 +1204,10 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-FieldValue = bool|int|float|str|List[str]|Enum
-ConfigSource = Literal[
+type FieldValue = bool|int|float|str|List[str]|Enum
+type ConfigSource = Literal[
     "args", "dict", "env", "ini", "json", "py", "toml",
 ] | str
-
-_C = TypeVar("_C", bound="BeanConfig")
-_F = TypeVar("_F", str, int, float, bool, list[str], Enum)
 
 class BeanConfig(ABC):
     """ Abstract base class for declarative application configuration.
@@ -1250,7 +1228,7 @@ class BeanConfig(ABC):
     """
 
     @dataclass
-    class _ConfigField(Generic[_F]):
+    class _ConfigField[F: FieldValue]:
         """ Declarative specification of a single configuration field.
 
         It is purely declarative and contains no runtime state.
@@ -1280,12 +1258,12 @@ class BeanConfig(ABC):
         @shadow:        Optional set of sources the field can not be set
         """
 
-        type: type[_F]
+        type: type[F]
         description: Optional[str] = None
         required: bool = False
-        default: Optional[_F] = None
-        validator: Optional[Callable[[_F], bool]] = None
-        normalizer: Optional[Callable[[_F], _F]] = None
+        default: Optional[F] = None
+        validator: Optional[Callable[[F], bool]] = None
+        normalizer: Optional[Callable[[F], F]] = None
         long_flag: Optional[str] = None
         short_flag: Optional[str] = None
         shadow: set[str] = field(default_factory=set)
@@ -1301,7 +1279,7 @@ class BeanConfig(ABC):
                     f"Unbound ConfigField, '{owner.__name__}.{self._name}' has no default and is not required"
                 )
 
-        def __get__(self, instance, owner) -> _F:
+        def __get__(self, instance, owner) -> F:
             """ HACK!!!
             Descriptor access logic.
 
@@ -1370,7 +1348,7 @@ class BeanConfig(ABC):
             except Exception: pass
             return None
 
-    _instance: ClassVar["BeanConfig | None"] = None
+    _instance: ClassVar[Optional[BeanConfig]] = None
     _spec: ClassVar[Dict[str, _ConfigField]] = {}
     # allow override `{ FIELD_NAME: { FN_NAME: fn, ... }, ... }`
     _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
@@ -1393,13 +1371,13 @@ class BeanConfig(ABC):
         cls._spec = fields
 
     @classmethod
-    def validate(
+    def validate[F: FieldValue](
         cls,
         *keys: str
-    ) -> Callable[[Callable[[_F], bool]], Callable[[_F], bool]]:
+    ) -> Callable[[Callable[[F], bool]], Callable[[F], bool]]:
         """ decorator to make custom validators on function definition """
 
-        def decorator(fn: Callable[[_F], bool]) -> Callable[[_F], bool]:
+        def decorator(fn: Callable[[F], bool]) -> Callable[[F], bool]:
             orig_fn = getattr(fn, "__func__", fn) # unwrap staticmethod
             name = str(orig_fn.__name__)
 
@@ -1430,7 +1408,7 @@ class BeanConfig(ABC):
         }
 
     @classmethod
-    def load(
+    def load[_C: BeanConfig](
         cls: type[_C],
         strict: bool = False,
         logger: Optional[Logger] = None,
@@ -1470,7 +1448,7 @@ class BeanConfig(ABC):
 
             print(line)
 
-    class _ConfigLoader(Generic[_C]):
+    class _ConfigLoader[_C: BeanConfig]:
         """ App config loader/builder
 
         Receives a schema, and loads sources to fill the config, validating it
@@ -1483,7 +1461,7 @@ class BeanConfig(ABC):
             strict: bool = False,
             log: Optional[Logger] = None,
         ):
-            self.config_cls = config_cls
+            self.config_cls: type[_C] = config_cls
             self._values: Dict[str, Any] = {}
             self._locked = False
             self.strict = strict
@@ -1814,18 +1792,18 @@ class BeanConfig(ABC):
 
 # sugar
 
-def ConfigField(
-        type: type[_F],
+def ConfigField[F: FieldValue](
+        type: type[F],
         *,
         description: Optional[str] = None,
         required: Optional[bool] = None,
-        default: Optional[_F] = None,
-        normalizer: Optional[Callable[[_F], _F]] = None,
-        validator: Optional[Predicate[_F]|Callable[[_F], bool]] = None,
+        default: Optional[F] = None,
+        normalizer: Optional[Callable[[F], F]] = None,
+        validator: Optional[Predicate[F]|Callable[[F], bool]] = None,
         long_flag: Optional[str] = None,
         short_flag: Optional[str] = None,
         shadow: Optional[Iterable[str]] = None,
-    ) -> _F:
+    ) -> F:
     """ Sugar to declare a BeanConfig fields.
 
     This wraps `BeanConfig._ConfigField` and auto-infers `required` if not
@@ -1846,10 +1824,6 @@ def ConfigField(
         short_flag=short_flag,
         shadow=set(shadow) if shadow is not None else set(),
     ) # type: ignore
-
-# cleanup
-
-del _F, _C
 
 # -----------------------------------------------------------------------------
 # config validators
