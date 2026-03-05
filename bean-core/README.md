@@ -113,12 +113,12 @@ class Color(Enum):
     BLUE  = "#0000ff"
 
 class MyConfig(BeanConfig):
-    NAME  = ConfigField(str)
-    DEBUG = ConfigField(bool, default=False, short_flag="-d")
-    PORT  = ConfigField(int, default=8080, validator=isPort)
-    HOST  = ConfigField(str, default="localhost", validator=isHost)
-    EMAIL = ConfigField(str, validator=isEmail)
-    COLOR = ConfigField(Color, default=Color.RED)
+    NAME   = ConfigField(str)
+    DEBUG  = ConfigField(bool, default=False, short_flag="-d")
+    PORT   = ConfigField(int, default=8080, validator=isPort)
+    HOST   = ConfigField(str, default="localhost", validator=isHost)
+    EMAIL  = ConfigField(str, validator=isEmail)
+    COLORS = ConfigField(list[Color], default=[Color.RED])
 
     @BeanConfig.validate("NAME")
     def check_empty_name(name):
@@ -129,7 +129,7 @@ class MyConfig(BeanConfig):
     .from_env("APP_")        # 1. environment variables
     .from_py("./config.py")  # 2. Python file (ignored if not found)
     .from_args()             # 3. command-line arguments (auto --help)
-).build() 
+).build()
 
 MyConfig.print_config()
 ```
@@ -169,7 +169,7 @@ result = (
     Pipe()
         .guard(lambda x: x != 0)
         .map(lambda x: 10 / x)
-)(0) 
+)(0)
 
 print(result)       # Success(value=0, ok=False)
 ```
@@ -199,7 +199,7 @@ from bean.core import sh, cat, tee, stdout
 
 res = ()
 print(
-    (sh("echo 'hello bean'") 
+    (sh("echo 'hello bean'")
         | sh("grep -F 'hello'")
         | tee("copy.txt")
         | stdout()
@@ -234,7 +234,7 @@ from bean.core import Scheduler
 
 ( Scheduler()
     .task(lambda: print("Bean task once"))
-).start() 
+).start()
 ```
 
 Periodic Job:

@@ -51,7 +51,7 @@ from time import sleep
 from typing import (
     Callable, Literal, NoReturn, ClassVar, Protocol, Self,
     List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, Optional, override
+    Any, Optional, get_args, get_origin, override
 )
 
 # -----------------------------------------------------------------------------
@@ -1209,7 +1209,7 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-type FieldValue = bool|int|float|str|List[str]|Enum
+type FieldValue = bool|int|float|str|Enum|List
 type ConfigSource = Literal[
     "args", "dict", "env", "ini", "json", "py", "toml",
 ] | str
@@ -1320,35 +1320,60 @@ class BeanConfig(ABC):
                 return self     # type: ignore  # before build -> schema
             return inst.__dict__[self._name]    # after build  -> value
 
-        def cast_val(self, val: Any) -> Optional[Any]:
+        def cast_val(self, val: FieldValue) -> Optional[FieldValue]:
             exp_t = self.type
-            if isinstance(val, exp_t): return val
+            origin = get_origin(exp_t)
+            check_t = origin or exp_t
 
-            try:
-                if exp_t is bool:
-                    if not isinstance(val, str): return bool(val)
-                    v = val.lower()
+            if isinstance(val, check_t): return val
+
+            enum_map: Dict[str, Enum] = {}
+            def _cast_scalar(t: type, v):
+                if isinstance(v, t): return v
+                if t is str:         return str(v)
+                if t is int:         return int(v)
+                if t is float:       return float(v)
+
+                if t is bool:
+                    if not isinstance(v, str): return bool(v)
+
+                    v = v.lower()
                     if v in ("1", "true", "yes", "on"):  return True
                     if v in ("0", "false", "no", "off"): return False
                     return None
-
-                if exp_t is int:    return int(val)
-                if exp_t is float:  return float(val)
-                if exp_t is str:    return str(val)
-
-                if exp_t is list:
-                    if not isinstance(val, str): return [val] # Type error?
-                    return [x.strip() for x in val.split(",")]
 
                 # Note: If an Enum name doesn't match, instead of raising a
                 #       clean `ValueError`, it will cause a `TypeError` because
                 #       on failure the raw value is returned. After all sources
                 #       are loaded, it is then validated against the field type.
-                if issubclass(exp_t, Enum) and isinstance(val, str):
-                    v = val.lower()
-                    for member in exp_t:
-                        if member.name.lower() == v:
-                            return member
+                if issubclass(t, Enum) and isinstance(v, str):
+                    nonlocal enum_map # simple cache
+                    if not enum_map: enum_map = {m.name.lower(): m for m in t}
+                    return enum_map.get(v.lower(), None)
+
+                return None
+
+            try:
+                if check_t is not list:
+                    return _cast_scalar(exp_t,  val)
+
+                args_t = get_args(exp_t)
+                elem_t = args_t[0] if args_t else str
+
+                if isinstance(val, list):
+                    items = val
+                elif isinstance(val, str):
+                    items = [x.strip() for x in val.split(",")]
+                else:
+                    items = [val] # type error?
+
+                out = []
+                for x in items:
+                    v = _cast_scalar(elem_t, x)
+                    if v is None:
+                        return None
+                    out.append(v)
+                return out
 
             except Exception: pass
             return None
@@ -1498,7 +1523,7 @@ class BeanConfig(ABC):
                     val = f.default
 
                 # type check
-                if not isinstance(val, f.type):
+                if not isinstance(val, get_origin(f.type) or f.type):
                     errors.append(TypeError(
                         f"Invalid type '{type(val).__name__}' for value {k} ({val})"))
                     continue
@@ -1671,13 +1696,26 @@ class BeanConfig(ABC):
                     help=f.description,
                 )
 
+                origin = get_origin(f.type) # extract `list` from `list[T]`
+
                 if f.type is bool:
                     if f.default is not None:
                         if f.default:   kwargs["action"] = "store_false"
                         else:           kwargs["action"] = "store_true"
 
-                elif f.type is list:
-                    kwargs["type"] = str  # lists parsed from str
+                elif f.type is list or origin is list:
+                    elem_type = str
+                    args_t = get_args(f.type) # extract `T` from `list[T]`
+
+                    if args_t:
+                        elem_type = args_t[0]
+
+                        if issubclass(elem_type, Enum):
+                            kwargs["choices"] = [m.name for m in elem_type]
+                            elem_type = str
+
+                    kwargs["type"] = elem_type
+                    kwargs["nargs"] = "*"
 
                 elif issubclass(f.type, Enum):
                     kwargs["type"] = str

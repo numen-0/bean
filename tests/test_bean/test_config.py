@@ -181,6 +181,59 @@ class TestConfig(BaseTest):
         # shadowed field should not be applied from CLI
         self.assertEqual(cfg.STAGE, Stage.TEST)  # default retained
 
+    def test_list_int_from_csv_string(self):
+        class AppConfig(BeanConfig):
+            PORTS = ConfigField(list[int], default=[])
+
+        bean.BeanConfig._instance = None
+
+        cfg = (
+            AppConfig
+            .load()
+            .from_dict({"PORTS": "80,443,8080"})
+            .build()
+        )
+
+        self.assertEqual(cfg.PORTS, [80, 443, 8080])
+
+    def test_list_int_invalid_element(self):
+        class AppConfig(BeanConfig):
+            PORTS = ConfigField(list[int], default=[])
+
+        bean.BeanConfig._instance = None
+
+        with self.assertRaises(ExceptionGroup) as cm:
+            (
+                AppConfig
+                .load()
+                .from_dict({"PORTS": "80,abc,443"})
+                .build()
+            )
+
+        err = cm.exception.exceptions[0]
+        self.assertIn("Invalid value", str(err))
+        self.assertIn("PORTS", str(err))
+
+    def test_list_enum(self):
+        class Color(Enum):
+            RED = 1
+            BLUE = 2
+            GREEN = 3
+
+        class AppConfig(BeanConfig):
+            COLORS = ConfigField(list[Color], default=[])
+
+        bean.BeanConfig._instance = None
+
+        cfg = (
+            AppConfig
+            .load()
+            .from_dict({"COLORS": "RED,BLUE"})
+            .build()
+        )
+
+        self.assertEqual(cfg.COLORS, [Color.RED, Color.BLUE])
+
     # validator
 
     def test_validator(self):
