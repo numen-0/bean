@@ -796,18 +796,23 @@ class Pipe[I, O]:
         def foo(value: O): return Success.Ok(fn(value))
         return self | Pipe(foo)
 
-    def guard(
+    def guard[R](
         self,
         fn: Callable[[O], bool],
+        err: Optional[R|Callable[[O], R]] = None
     ) -> Pipe[I, O]:
         """ Validate a value inside a pipe.
 
         Returns:
-          - `(value, True)`  if guard passes (`fn(value) == True`)
-          - `(value, False)` if guard fails
+          - `(value, True)`         if   guard passes (`fn(value) == True`)
+          - `(value, False)`        elif guard fails and err == None
+          - `(err(value), False)`   elif guard fails and err is Callable
+          - `(err, False)`          else
         """
         def foo(value: O) -> Success[O]:
             if fn(value): return Success.Ok(value)
+            if err is not None:
+                value = err(value) if callable(err) else err # type: ignore
             return Success(value, False)
 
         return self | Pipe(foo)
