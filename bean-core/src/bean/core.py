@@ -13,7 +13,7 @@
 # =========================================================================== #
 
 __version__ = "0.2.0"
-__doc__     = "tiny framework for bootstrapping apps"
+__doc__     = "Tiny framework for bootstrapping apps"
 __author__  = "numen-0"
 __license__ = "MIT"
 
@@ -24,7 +24,7 @@ __license__ = "MIT"
 __all__ = [
     "BeanApp",
     "Log", "Logger",
-    "Result", "Success", "Predicate", "predicate",
+    "Result", "Success", "Predicate",
     "Pipe",
     "Cmd", "sh", "cat", "tee", "stdout", "stderr",
     "install_signal_handlers", "shutdown_requested",
@@ -41,59 +41,32 @@ __all__ = [
 # -----------------------------------------------------------------------------
 
 import re, signal, subprocess, sys, atexit
-from abc import ABC, ABCMeta, abstractmethod
-from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
+from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from pathlib import Path
 from threading import Event, Thread
 from time import sleep
 from typing import (
-    Callable, Literal, NoReturn, ClassVar, Protocol, Self,
-    List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, TypeVar, Generic, Optional, override
+    Any, Literal, Optional, Type,
+    Callable, NoReturn,
+    ClassVar, Protocol, Self,
+    Dict, Iterable, List, Set, Tuple,
+    TextIO,
+    cast, dataclass_transform, get_args, get_origin, override
 )
 
 # -----------------------------------------------------------------------------
 # app
 # -----------------------------------------------------------------------------
 
-class _BeanMeta(ABCMeta):
-    _initialized = False
-    _guarded = { "NAME", "DEBUG" }
+class BeanApp(ABC):
+    """ Abstract base class for a Bean application. """
 
-    def __getattribute__(cls, name):
-        if (name in type.__getattribute__(cls, "_guarded")
-            and not type.__getattribute__(cls, "_initialized")):
-            raise RuntimeError(
-                f"{cls.__name__} must be initialized before accessing '{name}'")
-        return super().__getattribute__(name)
-
-class BeanApp(ABC, metaclass=_BeanMeta):
-    """ Bean module global config """
-
-    NAME : str
-    DEBUG : bool
-
-    def __init__(
-        self,
-        name: str = "bean-app",
-        debug: bool = False,
-    ):
-        if BeanApp._initialized:
-            raise RuntimeError("BeanApp already initialized")
-
-        BeanApp._initialized = True
-        BeanApp.NAME = name
-        BeanApp.DEBUG = debug
-
-    def __getattribute__(self, name: str) -> Any:
-        cls = type(self)
-        if name in cls._guarded and not cls._initialized:
-            raise RuntimeError(
-                f"{cls.__name__} must be initialized before accessing '{name}'"
-            )
-        return super().__getattribute__(name)
+    def __init__(self, name: str = "bean-app"):
+        self.name: str = name
 
     def startup(self) -> Optional[bool]: ...
 
@@ -101,8 +74,6 @@ class BeanApp(ABC, metaclass=_BeanMeta):
 
     @abstractmethod
     def run(self) -> int: ...
-
-del _BeanMeta
 
 # -----------------------------------------------------------------------------
 # main
@@ -308,6 +279,7 @@ class Logger:
     def fmt(
         *,
         color: bool = False,
+        level: bool = True,
         timestamp: bool = True,
         logger_name: bool = True,
     ) -> Callable[[Logger.Record], str]:
@@ -318,7 +290,8 @@ class Logger:
             if timestamp:
                 parts.append(f"{record.timestamp:%Y-%m-%d %H:%M:%S}")
 
-            parts.append(f"{record.level.name:<5}")
+            if level:
+                parts.append(f"{record.level.name:<5}")
 
             if logger_name:
                 parts.append(f"{record.logger:<24}")
@@ -522,7 +495,7 @@ class Logger:
 
     # mimic logging.exception
     def exception(self, msg: str) -> Self:
-        """Log an error message with the current exception traceback."""
+        """ Log an error message with the current exception traceback. """
         import traceback
 
         if sys.exc_info()[0] is not None: # check if is there is any exception
@@ -588,28 +561,24 @@ Log = Logger("bean")
 # type classes
 # -----------------------------------------------------------------------------
 
-_S = TypeVar("_S")  # Success type
-_E = TypeVar("_E")  # Error type
-_R = TypeVar("_R")  # Remap type for maps
-
-@dataclass(frozen=True)
-class Result(Generic[_S, _E]):
+@dataclass(frozen=True, slots=True)
+class Result[S, E]:
     ok: bool = False
-    value: Optional[_S] = None
-    error: Optional[_E] = None
+    value: Optional[S] = None
+    error: Optional[E] = None
 
     # constructors
 
     @staticmethod
-    def Ok(value: _S) -> Result[_S, _E]:
+    def Ok(value: S) -> Result[S, E]:
         return Result(value=value, ok=True)
 
     @staticmethod
-    def Error(error: _E) -> Result[_S, _E]:
+    def Error(error: E) -> Result[S, E]:
         return Result(error=error, ok=False)
 
     @staticmethod
-    def from_tuple(t: Tuple[_S, bool]) -> Result[_S, _S]:
+    def from_tuple(t: Tuple[S, bool]) -> Result[S, S]:
         """
         Convert a (value, ok) tuple into a Result.
         error is used if ok == False
@@ -632,41 +601,37 @@ class Result(Generic[_S, _E]):
             return self.value == other.value and self.ok == other.ok
         return NotImplemented
 
-    def to_success(self) -> Success[_S|_E]:
+    def to_success(self) -> Success[S|E]:
         return Success.from_tuple(self.to_tuple())
-    def to_tuple(self) -> Tuple[_S, Literal[True]]|Tuple[_E, Literal[False]]:
+    def to_tuple(self) -> Tuple[S, Literal[True]]|Tuple[E, Literal[False]]:
         if self.ok: return (self.value, True) # type: ignore
         return (self.error, False) # type: ignore
 
-    def unwrap(self) -> _S:
+    def unwrap(self) -> S:
         """ Return the value. Raise exception if has no `.value` """
         if not self.ok:
             raise RuntimeError(f"Unwrapped error Result: {self.error}")
         return self.value # type: ignore
 
-    def unwrap_or(self, default: _S) -> _S:
+    def unwrap_or(self, default: S) -> S:
         """ Return the value if ok, else return default. """
         if not self.ok: return default
         return self.value # type: ignore
 
-    def unwrap_err(self) -> _E:
+    def unwrap_err(self) -> E:
         """ Return the error. Raise exception if has no `.value` """
         if self.ok: raise RuntimeError(f"Result has no error")
         return self.error # type: ignore
 
-_T = TypeVar("_T")  # Generic type
-
-@dataclass(frozen=True)
-class Success(Generic[_T]):
-    value: _T
+@dataclass(frozen=True, slots=True)
+class Success[T]:
+    value: T
     ok: bool
 
     # constructors
 
     @staticmethod
-    def Ok(value: _T) -> Success[_T]:
-        if value is None:
-            raise TypeError("Success.Ok cannot hold None")
+    def Ok(value: T) -> Success[T]:
         return Success(value=value, ok=True)
 
     @staticmethod
@@ -674,7 +639,7 @@ class Success(Generic[_T]):
         return Success(value=None, ok=False)
 
     @staticmethod
-    def from_tuple(t: Tuple[_T, bool]) -> Success[_T]:
+    def from_tuple(t: Tuple[T, bool]) -> Success[T]:
         """
         Convert a (value, ok) tuple into a Success.
         Ignores the value if ok==False
@@ -682,7 +647,7 @@ class Success(Generic[_T]):
         return Success(*t)
 
     @staticmethod
-    def from_obj(obj: Tuple[_T, bool]|Success[_T]) -> Success[_T]:
+    def from_obj(obj: Tuple[T, bool]|Success[T]) -> Success[T]:
         if not isinstance(obj, Success):
             return Success.from_tuple(obj)
         return Success(obj.value, obj.ok)
@@ -700,68 +665,57 @@ class Success(Generic[_T]):
             return self.value == other.value and self.ok == other.ok
         return NotImplemented
 
-    def to_result(self) -> Result[_T, _T]:
+    def to_result(self) -> Result[T, T]:
         return Result.from_tuple(self.to_tuple())
-    def to_tuple(self) -> Tuple[_T, bool]:
+    def to_tuple(self) -> Tuple[T, bool]:
         return (self.value, self.ok)
 
-class Predicate(Generic[_T]):
-    def __init__(self, fn: Callable[[_T], bool], name: str | None = None):
-        self.fn = fn
-        self.name = name or fn.__name__
+@dataclass(slots=True, frozen=True)
+class Predicate[T]:
+    fn: Callable[[T], bool]
+    name: Optional[str] = None
 
-    def __call__(self, value: _T) -> bool:
+    def __post_init__(self):
+        if self.name is None:
+            object.__setattr__(self, "name", self.fn.__name__)
+
+    def __call__(self, value: T) -> bool:
         return bool(self.fn(value))
 
-    def __and__(self, other: Predicate[_T]) -> Predicate[_T]:
+    def __and__(self, other: Predicate[T]) -> Predicate[T]:
         return Predicate(
             lambda v: self(v) and other(v),
             name=f"({self.name} & {other.name})"
         )
 
-    def __or__(self, other: Predicate[_T]) -> Predicate[_T]:
+    def __or__(self, other: Predicate[T]) -> Predicate[T]:
         return Predicate(
             lambda v: self(v) or other(v),
             name=f"({self.name} | {other.name})"
         )
 
-    def __invert__(self) -> Predicate[_T]:
+    def __invert__(self) -> Predicate[T]:
         return Predicate(
             lambda v: not self(v),
-            name=f"(!{self.name})"
+            name=f"!{self.name}"
         )
 
     def __repr__(self):
         return f"<Predicate {self.name}>"
 
-    def trace(self, value: _T, log=None) -> bool:
-        res = self(value)
-        if log: log.debug(f"check {self.name} -> {res}")
-        return res
-
-# sugar
-
-def predicate(fn: Callable[[_T], bool]) -> Predicate[_T]:
-    """ Wrap a predicate into a Obj, enabling logical composition. """
-    return Predicate(fn)
-
-# cleanup
-
-del _S, _E, _R, _T
+    def trace(self, hook: Callable[[T, bool], Any]) -> Predicate[T]:
+        return Predicate(lambda value: (
+            res := self(value),
+            hook(value, res),
+        )[0], name=f"@{self.name}")
 
 # -----------------------------------------------------------------------------
 # pipes
 # -----------------------------------------------------------------------------
 
-_I = TypeVar("_I") # Input type
-_O = TypeVar("_O") # Output type
-_R = TypeVar("_R") # Result type
-_E = TypeVar("_E") # Error type
-_P = TypeVar("_P") # Pipe result
+type PipeResult[T] = Success[T] | Tuple[T, bool]
 
-PipeResult = Success[_P] | tuple[_P, bool]
-
-class Pipe(Generic[_I, _O]):
+class Pipe[I, O]:
     """ A composable transformation pipeline.
 
     - Each pipe stage receives a value and returns a `Success[O]` or a
@@ -781,33 +735,36 @@ class Pipe(Generic[_I, _O]):
 
     def __init__(
         self,
-        fn: Callable[[_I], PipeResult[_O]] = lambda v: Success.Ok(v)
+        fn: Optional[Callable[[I], PipeResult[O]]] = None
     ):
-        self._fn = fn
+        if fn is None:
+            def no_op(v): return Success.Ok(v)
+            fn = no_op
+        self._fn: Callable[[I], PipeResult[O]] = fn
 
-    def __call__(self, value: _I) -> Success[_O]:
+    def __call__(self, value: I) -> Success[O]:
         return Success.from_obj(self._fn(value))
 
-    def __or__(
+    def __or__[R](
         self,
-        other: Callable[[_O], PipeResult[_R]]
-    ) -> Pipe[_I, _R]:
-        if not isinstance(other, Pipe):
-            other = Pipe(other)
+        other: Callable[[O], PipeResult[R]]
+    ) -> Pipe[I, R]:
 
-        def join(value: _I) -> Success[_R]:
+        other = other if isinstance(other, Pipe) else Pipe(other)
+
+        @wraps(other._fn)
+        def join(value: I) -> Success[R]:
             res = self(value)
-            if res.ok: res = other(res.value)
-            return res # type: ignore
+            return other(res.value) if res.ok else res  # type: ignore
 
         return Pipe(join)
 
-    def retry(
+    def retry[R](
         self,
-        fn: Callable[[_O], PipeResult[_R]],
+        fn: Callable[[O], PipeResult[R]],
         attempts: int = 3,
         delay: float = 0.5,
-    ) -> Pipe[_I, _R]:
+    ) -> Pipe[I, R]:
         """ Wrap a pipe-compatible function with retry logic.
 
         The returned function will call `fn` up to `attempts` times, sleeping
@@ -820,7 +777,7 @@ class Pipe(Generic[_I, _O]):
         """
         assert 0 < attempts
 
-        def foo(value: _O) -> Success[_R]:
+        def foo(value: O) -> Success[R]:
             res = None
             for _ in range(attempts):
                 res = Success.from_obj(fn(value))
@@ -832,54 +789,59 @@ class Pipe(Generic[_I, _O]):
 
         return self | Pipe(foo)
 
-    def map(
+    def map[R](
         self,
-        fn: Callable[[_O], _R],
-    ) -> Pipe[_I, _R]:
+        fn: Callable[[O], R],
+    ) -> Pipe[I, R]:
         """ Lift a pure function into a pipe-compatible function.
 
         Returns: `(fn(value), True)`
         """
-        def foo(value: _O): return Success.Ok(fn(value))
+        def foo(value: O): return Success.Ok(fn(value))
         return self | Pipe(foo)
 
-    def guard(
+    def guard[R](
         self,
-        fn: Callable[[_O], bool],
-    ) -> Pipe[_I, _O]:
+        fn: Callable[[O], bool],
+        err: Optional[R|Callable[[O], R]] = None
+    ) -> Pipe[I, O]:
         """ Validate a value inside a pipe.
 
         Returns:
-          - `(value, True)`  if guard passes (`fn(value) == True`)
-          - `(value, False)` if guard fails
+          - `(value, True)`         if   guard passes (`fn(value) == True`)
+          - `(value, False)`        elif guard fails and err == None
+          - `(err(value), False)`   elif guard fails and err is Callable
+          - `(err, False)`          else
         """
-        def foo(value: _O) -> Success[_O]:
+        def foo(value: O) -> Success[O]:
             if fn(value): return Success.Ok(value)
+            if err is not None:
+                value = err(value) if callable(err) else err # type: ignore
             return Success(value, False)
 
         return self | Pipe(foo)
 
     def peek(
         self,
-        fn: Callable[[_O], Any],
-    ) -> Pipe[_I, _O]:
+        fn: Callable[[O], Any],
+    ) -> Pipe[I, O]:
         """ Execute a side-effect without modifying the value.
 
         Commonly used for logging, metrics, or debugging.
 
         Returns: `(value, True)`
         """
-        def foo(value: _O):
+        def foo(value: O):
             fn(value)
             return Success.Ok(value)
 
         return self | Pipe(foo)
 
-    def fallback(
+    def fallback[R, E](
         self,
-        fn: Callable[[_O], PipeResult[_R]],
-        fb: _E
-    ) -> Pipe[_I, _R|_E]:
+        fn: Callable[[O], PipeResult[R]],
+        fb: E
+    ) -> Pipe[I, R|E]:
         """ Convert a failing function into a successful one with a fallback.
 
         Useful for optional steps that should not stop the pipe.
@@ -888,18 +850,18 @@ class Pipe(Generic[_I, _O]):
           - `(value,    True)` if fn passes
           - `(fb_value, True)` if fn fails
         """
-        def foo(value: _O):
+        def foo(value: O):
             res = Success.from_obj(fn(value))
             return Success.Ok(res.value if res.ok else fb)
 
         return self | Pipe(foo)
 
-    def branch(
+    def branch[R, E](
         self,
-        cond_fn: Callable[[_O], bool],
-        success_fn: Optional[Callable[[_O], PipeResult[_R]]] = None,
-        fail_fn: Optional[Callable[[_O], PipeResult[_E]]] = None,
-    ) -> Pipe[_I, _O|_R|_E]:
+        cond_fn: Callable[[O], bool],
+        success_fn: Optional[Callable[[O], PipeResult[R]]] = None,
+        fail_fn: Optional[Callable[[O], PipeResult[E]]] = None,
+    ) -> Pipe[I, O|R|E]:
         """ Conditional branching inside a pipe.
 
         If the selected branch function is None, the value is passed through
@@ -910,7 +872,7 @@ class Pipe(Generic[_I, _O]):
           - `(s_value, bool)` if `cond_fn` passes and `success_fn` is provided
           - `(f_value, bool)` if `cond_fn` fails and `fail_fn` is provided
         """
-        def foo(value: _O) -> Success[_O|_R|_E]:
+        def foo(value: O) -> Success[O|R|E]:
             cond = cond_fn(value)
             if cond and success_fn is not None:
                 return Success.from_obj(success_fn(value))
@@ -922,17 +884,17 @@ class Pipe(Generic[_I, _O]):
 
     def trigger(
         self,
-        fn: Callable[[_O], bool],
+        fn: Callable[[O], bool],
         ex: type[Exception] = Exception,
         msg: Optional[str] = None
-    ) -> Pipe[_I, _O]:
+    ) -> Pipe[I, O]:
         """ Validate a value inside a pipe.
 
         Returns:
           - raise `ex(msg)` if trigger passes  (`fn(value) == True`)
           - `(value, True)` if trigger fails
         """
-        def foo(value: _O) -> Success[_O]:
+        def foo(value: O) -> Success[O]:
             if fn(value):
                 raise ex(msg or f"Pipe trigger activated on value: {value}")
             return Success.Ok(value)
@@ -1081,9 +1043,6 @@ def cat(
         return Success(Cmd.Result(int(not ok), output, ""), ok)
 
     return Pipe(foo)
-
-# cleanup
-del _E, _R, _I, _O, _P
 
 # -----------------------------------------------------------------------------
 # signals
@@ -1254,13 +1213,10 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-FieldValue = bool|int|float|str|List[str]|Enum
-ConfigSource = Literal[
+FieldValue = bool|int|float|str|Enum|list
+type ConfigSource = Literal[
     "args", "dict", "env", "ini", "json", "py", "toml",
 ] | str
-
-_C = TypeVar("_C", bound="BeanConfig")
-_F = TypeVar("_F", str, int, float, bool, list[str], Enum)
 
 class BeanConfig(ABC):
     """ Abstract base class for declarative application configuration.
@@ -1268,8 +1224,8 @@ class BeanConfig(ABC):
     `BeanConfig` provides a structured, type-safe configuration system based
       on declarative field specifications.
 
-    Subclasses define configuration schema via `_ConfigField` declarations.
-    The framework handles:
+    Subclasses define configuration schema via `_Field` declarations. The
+    framework handles:
 
         - Loading values from one or multiple sources (`json`, `env`, ...)
         - Type enforcement
@@ -1281,7 +1237,7 @@ class BeanConfig(ABC):
     """
 
     @dataclass
-    class _ConfigField(Generic[_F]):
+    class _Field[F: FieldValue]:
         """ Declarative specification of a single configuration field.
 
         It is purely declarative and contains no runtime state.
@@ -1311,12 +1267,12 @@ class BeanConfig(ABC):
         @shadow:        Optional set of sources the field can not be set
         """
 
-        type: type[_F]
+        type: type[F]
         description: Optional[str] = None
         required: bool = False
-        default: Optional[_F] = None
-        validator: Optional[Callable[[_F], bool]] = None
-        normalizer: Optional[Callable[[_F], _F]] = None
+        default: Optional[F] = None
+        validator: Optional[Callable[[F], bool]] = None
+        normalizer: Optional[Callable[[F], F]] = None
         long_flag: Optional[str] = None
         short_flag: Optional[str] = None
         shadow: set[str] = field(default_factory=set)
@@ -1332,7 +1288,7 @@ class BeanConfig(ABC):
                     f"Unbound ConfigField, '{owner.__name__}.{self._name}' has no default and is not required"
                 )
 
-        def __get__(self, instance, owner) -> _F:
+        def __get__(self, instance, owner) -> F:
             """ HACK!!!
             Descriptor access logic.
 
@@ -1368,43 +1324,110 @@ class BeanConfig(ABC):
                 return self     # type: ignore  # before build -> schema
             return inst.__dict__[self._name]    # after build  -> value
 
-        def cast_val(self, val: Any) -> Optional[Any]:
+        def cast_val(self, val: FieldValue) -> Optional[FieldValue]:
             exp_t = self.type
-            if isinstance(val, exp_t): return val
+            origin = get_origin(exp_t)
+            check_t = origin or exp_t
 
-            try:
-                if exp_t is bool:
-                    if not isinstance(val, str): return bool(val)
-                    v = val.lower()
+            if isinstance(val, check_t): return val
+
+            enum_map: Dict[str, Enum] = {}
+            def _cast_scalar(t: type, v):
+                if isinstance(v, t): return v
+                if t is str:         return str(v)
+                if t is int:         return int(v)
+                if t is float:       return float(v)
+
+                if t is bool:
+                    if not isinstance(v, str): return bool(v)
+
+                    v = v.lower()
                     if v in ("1", "true", "yes", "on"):  return True
                     if v in ("0", "false", "no", "off"): return False
                     return None
-
-                if exp_t is int:    return int(val)
-                if exp_t is float:  return float(val)
-                if exp_t is str:    return str(val)
-
-                if exp_t is list:
-                    if not isinstance(val, str): return [val] # Type error?
-                    return [x.strip() for x in val.split(",")]
 
                 # Note: If an Enum name doesn't match, instead of raising a
                 #       clean `ValueError`, it will cause a `TypeError` because
                 #       on failure the raw value is returned. After all sources
                 #       are loaded, it is then validated against the field type.
-                if issubclass(exp_t, Enum) and isinstance(val, str):
-                    v = val.lower()
-                    for member in exp_t:
-                        if member.name.lower() == v:
-                            return member
+                if issubclass(t, Enum) and isinstance(v, str):
+                    nonlocal enum_map # simple cache
+                    if not enum_map: enum_map = {m.name.lower(): m for m in t}
+                    return enum_map.get(v.lower(), None)
+
+                return None
+
+            try:
+                if check_t is not list:
+                    return _cast_scalar(exp_t,  val)
+
+                args_t = get_args(exp_t)
+                elem_t = args_t[0] if args_t else str
+
+                if isinstance(val, list):
+                    items = val
+                elif isinstance(val, str):
+                    items = [x.strip() for x in val.split(",")]
+                else:
+                    items = [val] # type error?
+
+                out = []
+                for x in items:
+                    v = _cast_scalar(elem_t, x)
+                    if v is None:
+                        return None
+                    out.append(v)
+                return out
 
             except Exception: pass
             return None
 
-    _instance: ClassVar["BeanConfig | None"] = None
-    _spec: ClassVar[Dict[str, _ConfigField]] = {}
+    _instance: ClassVar[Optional[BeanConfig]] = None
+    _spec: ClassVar[Dict[str, _Field]] = {}
     # allow override `{ FIELD_NAME: { FN_NAME: fn, ... }, ... }`
     _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
+
+    @staticmethod
+    @dataclass_transform()
+    def dataclass(bcls: Type[Any]) -> Type[Any]:
+        bcls = dataclass(bcls)
+        dc_cls = cast(type, bcls)
+
+        allowed = get_args(FieldValue)
+        def is_valid_field_type(t: type|type[Any]|Any) -> bool:
+            check_t = get_origin(t) or t
+
+            if check_t is list:
+                if not (sub := get_args(t)): return True
+                t = sub[0]
+
+            return t in allowed or (isinstance(t, type) and issubclass(t, Enum))
+
+        config_fields = {}
+        for f in fields(dc_cls):
+            t = f.type
+
+            if not is_valid_field_type(t):
+                raise TypeError(f"Field '{f.name}' has unsupported type: {t}")
+
+            if f.default is not MISSING:
+                required = False
+                default  = f.default
+            elif f.default_factory is not MISSING:
+                required = False
+                default  = f.default_factory()
+            else:
+                required = True
+                default = None
+
+            config_fields[f.name] = BeanConfig._Field(
+                t, # type: ignore
+                required=required,
+                default=default,
+            )
+
+        bcls._spec.update(config_fields)
+        return bcls
 
     def __init_subclass__(cls, **kwargs):
         """ Build the immutable schema `_spec` at class definition time.
@@ -1415,22 +1438,24 @@ class BeanConfig(ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        fields: Dict[str, BeanConfig._ConfigField] = {}
+        fields: Dict[str, BeanConfig._Field] = {}
+
+        # normal ConfigField discovery
         for base in reversed(cls.__mro__):      # python magic so we also set
             for k, v in base.__dict__.items():  # inherited fields...
-                if isinstance(v, BeanConfig._ConfigField):
+                if isinstance(v, BeanConfig._Field):
                     fields[k] = v
 
         cls._spec = fields
 
     @classmethod
-    def validate(
+    def validate[F: FieldValue](
         cls,
         *keys: str
-    ) -> Callable[[Callable[[_F], bool]], Callable[[_F], bool]]:
-        """ decorator to make custom validators on function definition """
+    ) -> Callable[[Callable[[F], bool]], Callable[[F], bool]]:
+        """ Decorator to make custom validators on function definition """
 
-        def decorator(fn: Callable[[_F], bool]) -> Callable[[_F], bool]:
+        def decorator(fn: Callable[[F], bool]) -> Callable[[F], bool]:
             orig_fn = getattr(fn, "__func__", fn) # unwrap staticmethod
             name = str(orig_fn.__name__)
 
@@ -1449,11 +1474,11 @@ class BeanConfig(ABC):
         cls._instance = obj
 
     @classmethod
-    def spec(cls) -> Dict[str, _ConfigField]:
+    def spec(cls) -> Dict[str, _Field]:
         return cls._spec
 
     @classmethod
-    def spec_for(cls, source: ConfigSource) -> Dict[str, _ConfigField]:
+    def spec_for(cls, source: ConfigSource) -> Dict[str, _Field]:
         return {
             k: f
             for k, f in cls._spec.items()
@@ -1461,11 +1486,11 @@ class BeanConfig(ABC):
         }
 
     @classmethod
-    def load(
-        cls: type[_C],
+    def load[C: BeanConfig](
+        cls: type[C],
         strict: bool = False,
         logger: Optional[Logger] = None,
-    ) -> BeanConfig._ConfigLoader[_C]:
+    ) -> BeanConfig._ConfigLoader[C]:
         return BeanConfig._ConfigLoader(cls, strict, logger)
 
     @classmethod
@@ -1475,7 +1500,7 @@ class BeanConfig(ABC):
         show_defaults: bool = False,
         show_required: bool = False,
     ) -> None:
-        """Pretty-print the current configuration."""
+        """ Pretty-print the current configuration. """
 
         if cls._instance is None:
             raise RuntimeError("Config not loaded")
@@ -1501,7 +1526,7 @@ class BeanConfig(ABC):
 
             print(line)
 
-    class _ConfigLoader(Generic[_C]):
+    class _ConfigLoader[C: BeanConfig]:
         """ App config loader/builder
 
         Receives a schema, and loads sources to fill the config, validating it
@@ -1510,11 +1535,11 @@ class BeanConfig(ABC):
 
         def __init__(
             self,
-            config_cls: type[_C],
+            config_cls: type[C],
             strict: bool = False,
             log: Optional[Logger] = None,
         ):
-            self.config_cls = config_cls
+            self.config_cls: type[C] = config_cls
             self._values: Dict[str, Any] = {}
             self._locked = False
             self.strict = strict
@@ -1524,8 +1549,8 @@ class BeanConfig(ABC):
 
         # post config steps
 
-        def validate(self) -> BeanConfig._ConfigLoader[_C]:
-            """ validate current config """
+        def validate(self) -> BeanConfig._ConfigLoader[C]:
+            """ Validate current config """
 
             errors = []
             spec = self.config_cls.spec()
@@ -1546,7 +1571,7 @@ class BeanConfig(ABC):
                     val = f.default
 
                 # type check
-                if not isinstance(val, f.type):
+                if not isinstance(val, get_origin(f.type) or f.type):
                     errors.append(TypeError(
                         f"Invalid type '{type(val).__name__}' for value {k} ({val})"))
                     continue
@@ -1568,7 +1593,7 @@ class BeanConfig(ABC):
 
             def collect_validators(
             ) -> Dict[str, Dict[str, Callable[[FieldValue], bool]]]:
-                """Dynamically collect validators via MRO."""
+                """ Dynamically collect validators via MRO. """
                 validators = {}
 
                 for base in reversed(self.config_cls.__mro__):
@@ -1604,13 +1629,14 @@ class BeanConfig(ABC):
 
             return self
 
-        def build(self) -> _C:
-            """validate and build the config"""
-            obj = self.validate().config_cls()
+        def build(self) -> C:
+            """ Validate and build the config """
+            obj = object.__new__(self.validate().config_cls)
 
             # Note: we override the instance attr not the class attributes
             for k, v in self._values.items():
                 setattr(obj, k, v)
+                setattr(self.config_cls, k, v)
 
             self.config_cls._set_instance(obj)
             return obj
@@ -1636,8 +1662,7 @@ class BeanConfig(ABC):
             data: Dict[str, Any],
             key_mapper: Callable[[str], str] = lambda k: k
         ) -> Self:
-            """
-            Generic loader: cast and store values from any source.
+            """ Generic loader: cast and store values from any source.
 
             - data: dict of raw key -> value
             - source: string for logging purposes
@@ -1719,13 +1744,26 @@ class BeanConfig(ABC):
                     help=f.description,
                 )
 
+                origin = get_origin(f.type) # extract `list` from `list[T]`
+
                 if f.type is bool:
                     if f.default is not None:
                         if f.default:   kwargs["action"] = "store_false"
                         else:           kwargs["action"] = "store_true"
 
-                elif f.type is list:
-                    kwargs["type"] = str  # lists parsed from str
+                elif f.type is list or origin is list:
+                    elem_type = str
+                    args_t = get_args(f.type) # extract `T` from `list[T]`
+
+                    if args_t:
+                        elem_type = args_t[0]
+
+                        if issubclass(elem_type, Enum):
+                            kwargs["choices"] = [m.name for m in elem_type]
+                            elem_type = str
+
+                    kwargs["type"] = elem_type
+                    kwargs["nargs"] = "*"
 
                 elif issubclass(f.type, Enum):
                     kwargs["type"] = str
@@ -1845,18 +1883,18 @@ class BeanConfig(ABC):
 
 # sugar
 
-def ConfigField(
-        type: type[_F],
+def ConfigField[F: FieldValue](
+        type: type[F],
         *,
         description: Optional[str] = None,
         required: Optional[bool] = None,
-        default: Optional[_F] = None,
-        normalizer: Optional[Callable[[_F], _F]] = None,
-        validator: Optional[Predicate[_F]|Callable[[_F], bool]] = None,
+        default: Optional[F] = None,
+        normalizer: Optional[Callable[[F], F]] = None,
+        validator: Optional[Predicate[F]|Callable[[F], bool]] = None,
         long_flag: Optional[str] = None,
         short_flag: Optional[str] = None,
         shadow: Optional[Iterable[str]] = None,
-    ) -> _F:
+    ) -> F:
     """ Sugar to declare a BeanConfig fields.
 
     This wraps `BeanConfig._ConfigField` and auto-infers `required` if not
@@ -1866,7 +1904,7 @@ def ConfigField(
         - Otherwise, `required` is set to `False`.
     """
     if required is None: required = default is None
-    return BeanConfig._ConfigField(
+    return BeanConfig._Field(
         type,
         description=description,
         required=required,
@@ -1878,56 +1916,51 @@ def ConfigField(
         shadow=set(shadow) if shadow is not None else set(),
     ) # type: ignore
 
-# cleanup
-
-del _F, _C
-
 # -----------------------------------------------------------------------------
 # config validators
 # -----------------------------------------------------------------------------
 
-@predicate
+@Predicate
 def isPositive(n: int | float) -> bool:
-    """Check that a number is negative `n > 0`."""
+    """ Check that a number is negative `n > 0`. """
     return n > 0
 
-@predicate
+@Predicate
 def isNegative(n: int | float) -> bool:
-    """Check that a number is negative `n < 0`."""
+    """ Check that a number is negative `n < 0`. """
     return n < 0
 
-@predicate
+@Predicate
 def isPort(n: int) -> bool:
-    """Check that a number is a valid TCP/UDP port."""
+    """ Check that a number is a valid TCP/UDP port. """
     return isinstance(n, int) and 0 < n <= 65535
 
-@predicate
+@Predicate
 def nonEmpty(s: str) -> bool:
-    """Check that a string is not empty / blank."""
+    """ Check that a string is not empty / blank. """
     return bool(s.strip())
 
 rEmail = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
-@predicate
+@Predicate
 def isEmail(email: str) -> bool:
-    """Check that a string is a simple valid email."""
+    """ Check that a string is a simple valid email. """
     return bool(re.fullmatch(rEmail, email))
 
 def isDate(fmt: str = "%Y-%m-%d") -> Predicate[str]:
-    from datetime import datetime
+    """ Check that a string is a valid date in the given format. """
 
     def check(date: str) -> bool:
-        """Check that a string is a valid date in the given format."""
         try:
             datetime.strptime(date, fmt)
             return True
         except ValueError:
             return False
 
-    return predicate(check)
+    return Predicate(check, name=f"isDate[{fmt}]")
 
-@predicate
+@Predicate
 def isUrl(url: str) -> bool:
-    """Check that a string is a valid URL."""
+    """ Check that a string is a valid URL. """
     from urllib.parse import urlparse
     result = urlparse(url)
     return all([result.scheme, result.netloc])
@@ -1935,18 +1968,18 @@ def isUrl(url: str) -> bool:
 _rHostname = re.compile(
     r"^(?=.{1,253}$)(?!-)([A-Za-z0-9-]{1,63}\.)*[A-Za-z0-9-]{1,63}$"
 )
-@predicate
+@Predicate
 def isHost(hostname: str) -> bool:
-    """Check that a string is a syntactically valid hostname."""
+    """ Check that a string is a syntactically valid hostname. """
     if not hostname:
         return False
     if hostname.endswith("."):
         hostname = hostname[:-1]  # strip trailing dot
     return bool(_rHostname.fullmatch(hostname))
 
-@predicate
+@Predicate
 def isIPv4(ip: str) -> bool:
-    """Check that a string is a valid IPv4."""
+    """ Check that a string is a valid IPv4. """
     import ipaddress
     try:
         ipaddress.IPv4Address(ip)
@@ -1954,9 +1987,9 @@ def isIPv4(ip: str) -> bool:
     except Exception:
         return False
 
-@predicate
+@Predicate
 def isIPv6(ip: str) -> bool:
-    """Check that a string is a valid IPv6."""
+    """ Check that a string is a valid IPv6. """
     import ipaddress
     try:
         ipaddress.IPv6Address(ip)
@@ -1964,20 +1997,20 @@ def isIPv6(ip: str) -> bool:
     except Exception:
         return False
 
-@predicate
-def pathExists(path: str) -> bool:
-    """Check that a string is a valid path to something."""
+@Predicate
+def pathExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to something. """
     return Path(path).exists()
 
-@predicate
-def fileExists(path: str) -> bool:
-    """Check that a string is a valid path to a file."""
+@Predicate
+def fileExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to a file. """
     p = Path(path)
     return p.exists() and p.is_file()
 
-@predicate
-def dirExists(path: str) -> bool:
-    """Check that a string is a valid path to a dir."""
+@Predicate
+def dirExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to a dir. """
     p = Path(path)
     return p.exists() and p.is_dir()
 

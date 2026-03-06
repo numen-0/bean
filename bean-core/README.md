@@ -68,7 +68,8 @@ from bean.core import BeanApp, Log, Logger, main, shutdown_requested
 class App(BeanApp):
     def startup(self):
         Log.init(
-            level=Logger.Level.from_debug(self.DEBUG),
+            self.name,
+            level=Logger.Level.from_debug(True),
             handlers=[Logger.TermHandler(Logger.fmt(color=True))]
         )
         Log.debug("starting...")
@@ -85,12 +86,12 @@ class App(BeanApp):
         return 0
 
 if __name__ == "__main__":
-    main(App("bean-app", debug=True))
+    main(App("bean-app"))
 ```
 
 ### Config
 
-BeanConfig can be populated from multiple sources, with a defined priority.
+`BeanConfig` can be populated from multiple sources, with a defined priority.
 Available sources:
 
 - `.from_args()`: parse command-line arguments with `argparse`
@@ -112,12 +113,12 @@ class Color(Enum):
     BLUE  = "#0000ff"
 
 class MyConfig(BeanConfig):
-    NAME  = ConfigField(str)
-    DEBUG = ConfigField(bool, default=False, short_flag="-d")
-    PORT  = ConfigField(int, default=8080, validator=isPort)
-    HOST  = ConfigField(str, default="localhost", validator=isHost)
-    EMAIL = ConfigField(str, validator=isEmail)
-    COLOR = ConfigField(Color, default=Color.RED)
+    NAME   = ConfigField(str)
+    DEBUG  = ConfigField(bool, default=False, short_flag="-d")
+    PORT   = ConfigField(int, default=8080, validator=isPort)
+    HOST   = ConfigField(str, default="localhost", validator=isHost)
+    EMAIL  = ConfigField(str, validator=isEmail)
+    COLORS = ConfigField(list[Color], default=[Color.RED])
 
     @BeanConfig.validate("NAME")
     def check_empty_name(name):
@@ -128,18 +129,148 @@ class MyConfig(BeanConfig):
     .from_env("APP_")        # 1. environment variables
     .from_py("./config.py")  # 2. Python file (ignored if not found)
     .from_args()             # 3. command-line arguments (auto --help)
-).build() 
+).build()
 
 MyConfig.print_config()
 ```
+
 > Note: If your type checker complains about check_empty_name, add
->       `@staticmethod` or `# type: ignore`.
+>       `@staticmethod`, `# type: ignore` or declare it outside the class:
+>
+> ```py
+> class MyConfig(BeanConfig):
+>     NAME   = ConfigField(str)
+>     DEBUG  = ConfigField(bool, default=False, short_flag="-d")
+>     PORT   = ConfigField(int, default=8080, validator=isPort)
+>     HOST   = ConfigField(str, default="localhost", validator=isHost)
+>     EMAIL  = ConfigField(str, validator=isEmail)
+>     COLORS = ConfigField(list[Color], default=[Color.RED])
+>
+>
+> @MyConfig.validate("NAME")
+> def check_empty_name(name):
+>     return len(name) > 0
+> ```
+>> Note: Validators declared this way only affect `MyConfig` or its subclasses,
+>>       unless explicitly overridden (field + function names must match).
+
+#### Simpler Dataclass-Style Config
+
+For simpler configs, use the `BeanConfig.dataclass` decorator. It generates a
+dataclass-style config class while maintaining full `BeanConfig` features:
+
+```py
+from dataclasses import field
+from enum import Enum
+from bean.core import BeanConfig
+
+class Color(Enum):
+    RED   = "#ff0000"
+    GREEN = "#00ff00"
+    BLUE  = "#0000ff"
+
+@BeanConfig.dataclass
+class MySimpleConfig(BeanConfig):
+    NAME: str
+    EMAIL: str
+    DEBUG: bool = False
+    PORT: int = 8080
+    HOST: str = "localhost"
+    COLORS: list[Color] = field(default_factory=lambda: [Color.RED])
+
+( MySimpleConfig.load()
+    .from_dict({
+        "NAME": "alex",
+        "EMAIL": "alex@example.com"
+    })
+ ).build().print_config()
+```
+
+- Required fields are inferred from the type annotations.
+- Fields with defaults or `default_factory` are optional.
+- After .build(), values can be accessed via instance or class-level.
+
+### Predicates
+
+`Predicate` is a composable `T -> bool` function.
+
+A predicate:
+
+- Receives a value
+- Returns `True` or `False`
+- Can be combined with other predicates to build complex logic
+
+Predicates are useful for **validation**, **filtering** and **guards**.
+
+```py
+from bean.core import Predicate
+
+positive = Predicate(lambda x: x > 0, name="positive")
+
+print(positive(5))      # True
+print(positive(-1))     # False
+```
+
+Predicates can also be created using a decorator:
+
+```py
+from bean.core import Predicate
+
+@Predicate
+def positive(x: int):
+    return x > 0
+```
+
+Predicates support logical composition:
+
+```py
+@Predicate
+def positive(x: int): return x > 0
+
+@Predicate
+def even(x: int): return x % 2 == 0
+
+p = positive & even
+
+print(p(4))     # True
+print(p(3))     # False
+print(p(-2))    # False
+```
+
+Available operators:
+
+- `p1 & p2`: logical **AND**
+- `p1 | p2`: logical **OR**
+- `~p`:      logical **NOT**
+
+Predicates can be traced or hooked:
+
+```py
+from bean.core import Predicate
+
+count = 0
+def watcher(value, result):
+    global count
+    count += 1
+    print(f"{count:02d}: {value} -> {result}")
+
+@Predicate
+def positive(x: int):
+    return x > 0
+
+traced = positive.trace(watcher)
+
+traced(5)       # 01: 5 -> True
+traced(-2)      # 02: -2 -> False
+traced(4)       # 03: 4 -> True
+```
 
 ### Pipes
 
-`Pipe` is a small, composable transformation pipeline.
+`Pipe` is a composable transformation pipeline.
 
 Each stage:
+
 - Receives a value
 - Returns either:
     - `Success(value)` or `tuple(value, True)`
@@ -157,7 +288,7 @@ result = (
         .map(lambda x: 10 / x)
 )(5)
 
-print(result)       # Success(2.0, ok=True)
+print(result)   # Success(2.0, ok=True)
 ```
 > Note: pipes can be typed, e.g: `Pipe[float, float]()`
 
@@ -168,9 +299,9 @@ result = (
     Pipe()
         .guard(lambda x: x != 0)
         .map(lambda x: 10 / x)
-)(0) 
+)(0)
 
-print(result)       # Success(value=0, ok=False)
+print(result)   # Success(value=0, ok=False)
 ```
 
 The pipe short-circuits and the division step is never executed.
@@ -187,6 +318,45 @@ Available `Pipe` helpers:
 
 > Pipes are fully composable using the `|` operator.
 
+Functions can be wrapped using `Pipe` as decorator:
+
+```py
+from bean.core import Pipe
+
+@Pipe
+def dup(x: int|float):
+    return (x * 2, True)
+
+@Pipe
+def half(x: int|float):
+    return (x / 2, True)
+
+pipe = (dup | half).map(int)
+
+print(pipe(10))     # Success(10, ok=True)
+```
+
+#### Using predicates with pipes
+
+Predicates integrate naturally with `Pipe.guard`.
+
+```py
+from bean.core import Pipe, Predicate
+
+@Predicate
+def positive(x: int):
+    return x > 0
+
+pipe = (
+    Pipe[int, int]()
+        .guard(positive)
+        .map(lambda x: x * 2)
+)
+
+print(pipe(5))      # Success(10, ok=True)
+print(pipe(-1))     # Success(-1, ok=False)
+```
+
 #### Shell Commands
 
 Shell commands integrate directly into pipes.
@@ -198,7 +368,7 @@ from bean.core import sh, cat, tee, stdout
 
 res = ()
 print(
-    (sh("echo 'hello bean'") 
+    (sh("echo 'hello bean'")
         | sh("grep -F 'hello'")
         | tee("copy.txt")
         | stdout()
@@ -233,7 +403,7 @@ from bean.core import Scheduler
 
 ( Scheduler()
     .task(lambda: print("Bean task once"))
-).start() 
+).start()
 ```
 
 Periodic Job:

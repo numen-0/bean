@@ -37,7 +37,6 @@ classifiers = [
 homepage = "https://github.com/numen-0/bean"
 repository = "https://github.com/numen-0/bean"
 issues = "https://github.com/numen-0/bean/issues"
-documentation = "https://github.com/numen-0/bean/bean-core/src/bean/core.py"
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
