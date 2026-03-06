@@ -24,7 +24,7 @@ __license__ = "MIT"
 __all__ = [
     "BeanApp",
     "Log", "Logger",
-    "Result", "Success", "Predicate", "predicate",
+    "Result", "Success", "Predicate",
     "Pipe",
     "Cmd", "sh", "cat", "tee", "stdout", "stderr",
     "install_signal_handlers", "shutdown_requested",
@@ -40,6 +40,7 @@ __all__ = [
 # imports
 # -----------------------------------------------------------------------------
 
+from functools import wraps
 import re, signal, subprocess, sys, atexit
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -557,7 +558,7 @@ Log = Logger("bean")
 # type classes
 # -----------------------------------------------------------------------------
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Result[S, E]:
     ok: bool = False
     value: Optional[S] = None
@@ -619,7 +620,7 @@ class Result[S, E]:
         if self.ok: raise RuntimeError(f"Result has no error")
         return self.error # type: ignore
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Success[T]:
     value: T
     ok: bool
@@ -628,8 +629,6 @@ class Success[T]:
 
     @staticmethod
     def Ok(value: T) -> Success[T]:
-        if value is None:
-            raise TypeError("Success.Ok cannot hold None")
         return Success(value=value, ok=True)
 
     @staticmethod
@@ -668,10 +667,14 @@ class Success[T]:
     def to_tuple(self) -> Tuple[T, bool]:
         return (self.value, self.ok)
 
+@dataclass(slots=True, frozen=True)
 class Predicate[T]:
-    def __init__(self, fn: Callable[[T], bool], name: str | None = None):
-        self.fn = fn
-        self.name = name or fn.__name__
+    fn: Callable[[T], bool]
+    name: Optional[str] = None
+
+    def __post_init__(self):
+        if self.name is None:
+            object.__setattr__(self, "name", self.fn.__name__)
 
     def __call__(self, value: T) -> bool:
         return bool(self.fn(value))
@@ -691,22 +694,17 @@ class Predicate[T]:
     def __invert__(self) -> Predicate[T]:
         return Predicate(
             lambda v: not self(v),
-            name=f"(!{self.name})"
+            name=f"!{self.name}"
         )
 
     def __repr__(self):
         return f"<Predicate {self.name}>"
 
-    def trace(self, value: T, log=None) -> bool:
-        res = self(value)
-        if log: log.debug(f"check {self.name} -> {res}")
-        return res
-
-# sugar
-
-def predicate[T](fn: Callable[[T], bool]) -> Predicate[T]:
-    """ Wrap a predicate into a Obj, enabling logical composition. """
-    return Predicate(fn)
+    def trace(self, hook: Callable[[T, bool], Any]) -> Predicate[T]:
+        return Predicate(lambda value: (
+            res := self(value),
+            hook(value, res),
+        )[0], name=f"@{self.name}")
 
 # -----------------------------------------------------------------------------
 # pipes
@@ -734,9 +732,12 @@ class Pipe[I, O]:
 
     def __init__(
         self,
-        fn: Callable[[I], PipeResult[O]] = lambda v: Success.Ok(v)
+        fn: Optional[Callable[[I], PipeResult[O]]] = None
     ):
-        self._fn = fn
+        if fn is None:
+            def no_op(v): return Success.Ok(v)
+            fn = no_op
+        self._fn: Callable[[I], PipeResult[O]] = fn
 
     def __call__(self, value: I) -> Success[O]:
         return Success.from_obj(self._fn(value))
@@ -745,13 +746,13 @@ class Pipe[I, O]:
         self,
         other: Callable[[O], PipeResult[R]]
     ) -> Pipe[I, R]:
-        if not isinstance(other, Pipe):
-            other = Pipe(other)
 
+        other = other if isinstance(other, Pipe) else Pipe(other)
+
+        @wraps(other._fn)
         def join(value: I) -> Success[R]:
             res = self(value)
-            if res.ok: res = other(res.value)
-            return res # type: ignore
+            return other(res.value) if res.ok else res  # type: ignore
 
         return Pipe(join)
 
@@ -1872,28 +1873,28 @@ def ConfigField[F: FieldValue](
 # config validators
 # -----------------------------------------------------------------------------
 
-@predicate
+@Predicate
 def isPositive(n: int | float) -> bool:
     """Check that a number is negative `n > 0`."""
     return n > 0
 
-@predicate
+@Predicate
 def isNegative(n: int | float) -> bool:
     """Check that a number is negative `n < 0`."""
     return n < 0
 
-@predicate
+@Predicate
 def isPort(n: int) -> bool:
     """Check that a number is a valid TCP/UDP port."""
     return isinstance(n, int) and 0 < n <= 65535
 
-@predicate
+@Predicate
 def nonEmpty(s: str) -> bool:
     """Check that a string is not empty / blank."""
     return bool(s.strip())
 
 rEmail = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
-@predicate
+@Predicate
 def isEmail(email: str) -> bool:
     """Check that a string is a simple valid email."""
     return bool(re.fullmatch(rEmail, email))
@@ -1909,9 +1910,9 @@ def isDate(fmt: str = "%Y-%m-%d") -> Predicate[str]:
         except ValueError:
             return False
 
-    return predicate(check)
+    return Predicate(check)
 
-@predicate
+@Predicate
 def isUrl(url: str) -> bool:
     """Check that a string is a valid URL."""
     from urllib.parse import urlparse
@@ -1921,7 +1922,7 @@ def isUrl(url: str) -> bool:
 _rHostname = re.compile(
     r"^(?=.{1,253}$)(?!-)([A-Za-z0-9-]{1,63}\.)*[A-Za-z0-9-]{1,63}$"
 )
-@predicate
+@Predicate
 def isHost(hostname: str) -> bool:
     """Check that a string is a syntactically valid hostname."""
     if not hostname:
@@ -1930,7 +1931,7 @@ def isHost(hostname: str) -> bool:
         hostname = hostname[:-1]  # strip trailing dot
     return bool(_rHostname.fullmatch(hostname))
 
-@predicate
+@Predicate
 def isIPv4(ip: str) -> bool:
     """Check that a string is a valid IPv4."""
     import ipaddress
@@ -1940,7 +1941,7 @@ def isIPv4(ip: str) -> bool:
     except Exception:
         return False
 
-@predicate
+@Predicate
 def isIPv6(ip: str) -> bool:
     """Check that a string is a valid IPv6."""
     import ipaddress
@@ -1950,18 +1951,18 @@ def isIPv6(ip: str) -> bool:
     except Exception:
         return False
 
-@predicate
+@Predicate
 def pathExists(path: str) -> bool:
     """Check that a string is a valid path to something."""
     return Path(path).exists()
 
-@predicate
+@Predicate
 def fileExists(path: str) -> bool:
     """Check that a string is a valid path to a file."""
     p = Path(path)
     return p.exists() and p.is_file()
 
-@predicate
+@Predicate
 def dirExists(path: str) -> bool:
     """Check that a string is a valid path to a dir."""
     p = Path(path)

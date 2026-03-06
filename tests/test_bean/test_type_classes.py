@@ -45,8 +45,8 @@ class TestTypes(BaseTest):
     # Predicate
 
     def test_predicate_basic(self):
-        is_even = Predicate(lambda x: x % 2 == 0)
-        is_positive = Predicate(lambda x: x > 0)
+        is_even = Predicate[int](lambda x: x % 2 == 0)
+        is_positive = Predicate[int](lambda x: x > 0)
 
         self.assertTrue(is_even(4))
         self.assertFalse(is_even(5))
@@ -54,8 +54,8 @@ class TestTypes(BaseTest):
         self.assertFalse(is_positive(-1))
 
     def test_predicate_composition(self):
-        is_even = Predicate(lambda x: x % 2 == 0)
-        is_positive = Predicate(lambda x: x > 0)
+        is_even = Predicate[int](lambda x: x % 2 == 0)
+        is_positive = Predicate[int](lambda x: x > 0)
         combined = is_even & is_positive
         self.assertTrue(combined(4))
         self.assertFalse(combined(-4))
@@ -67,4 +67,55 @@ class TestTypes(BaseTest):
         neg = ~is_even
         self.assertTrue(neg(3))
         self.assertFalse(neg(4))
+
+    def test_predicate_trace_basic(self):
+        calls = []
+
+        @Predicate
+        def even(x: int): return x % 2 == 0
+        traced = even.trace(lambda v, r: calls.append((v, r)))
+
+        self.assertCases([
+            (2, True), (3, False), (4, True),
+        ], traced)
+
+        self.assertEqual(calls, [
+            (2, True), (3, False), (4, True),
+        ])
+
+    def test_predicate_trace_preserves_result(self):
+        p = Predicate[int](lambda x: x > 10, "gt10")
+        traced = p.trace(lambda *_: None)
+
+        self.assertCases([
+            (5, False),
+            (10, False),
+            (11, True),
+        ], traced)
+
+    def test_predicate_trace_name(self):
+        p = Predicate[int](lambda x: x > 0, "positive")
+        traced = p.trace(lambda *_: None)
+
+        self.assertEqual(traced.name, "@positive")
+
+        @Predicate
+        def negative(x: int): return x < 0
+        traced = negative.trace(lambda *_: None)
+
+        self.assertEqual(traced.name, "@negative")
+
+    def test_trace_does_not_modify_original(self):
+        p = Predicate[int](lambda x: x > 0, "pos")
+        traced = p.trace(lambda *_: None)
+
+        self.assertEqual(p.name, "pos")
+        self.assertEqual(traced.name, "@pos")
+
+        @Predicate
+        def neg(x: int): return x > 0
+        traced = neg.trace(lambda *_: None)
+
+        self.assertEqual(neg.name, "neg")
+        self.assertEqual(traced.name, "@neg")
 

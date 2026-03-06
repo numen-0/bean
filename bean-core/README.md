@@ -136,11 +136,87 @@ MyConfig.print_config()
 > Note: If your type checker complains about check_empty_name, add
 >       `@staticmethod` or `# type: ignore`.
 
+### Predicates
+
+`Predicate` is a composable `T -> bool` function.
+
+A predicate:
+
+- Receives a value
+- Returns `True` or `False`
+- Can be combined with other predicates to build complex logic
+
+Predicates are useful for **validation**, **filtering** and **guards**.
+
+```py
+from bean.core import Predicate
+
+positive = Predicate(lambda x: x > 0, name="positive")
+
+print(positive(5))      # True
+print(positive(-1))     # False
+```
+
+Predicates can also be created using a decorator:
+
+```py
+from bean.core import Predicate
+
+@Predicate
+def positive(x: int):
+    return x > 0
+```
+
+Predicates support logical composition:
+
+```py
+@Predicate
+def positive(x: int): return x > 0
+
+@Predicate
+def even(x: int): return x % 2 == 0
+
+p = positive & even
+
+print(p(4))     # True
+print(p(3))     # False
+print(p(-2))    # False
+```
+
+Available operators:
+
+- `p1 & p2`: logical **AND**
+- `p1 | p2`: logical **OR**
+- `~p`:      logical **NOT**
+
+Predicates can be traced or hooked:
+
+```py
+from bean.core import Predicate
+
+count = 0
+def watcher(value, result):
+    global count
+    count += 1
+    print(f"{count:02d}: {value} -> {result}")
+
+@Predicate
+def positive(x: int):
+    return x > 0
+
+traced = positive.trace(watcher)
+
+traced(5)       # 01: 5 -> True
+traced(-2)      # 02: -2 -> False
+traced(4)       # 03: 4 -> True
+```
+
 ### Pipes
 
-`Pipe` is a small, composable transformation pipeline.
+`Pipe` is a composable transformation pipeline.
 
 Each stage:
+
 - Receives a value
 - Returns either:
     - `Success(value)` or `tuple(value, True)`
@@ -158,7 +234,7 @@ result = (
         .map(lambda x: 10 / x)
 )(5)
 
-print(result)       # Success(2.0, ok=True)
+print(result)   # Success(2.0, ok=True)
 ```
 > Note: pipes can be typed, e.g: `Pipe[float, float]()`
 
@@ -171,7 +247,7 @@ result = (
         .map(lambda x: 10 / x)
 )(0)
 
-print(result)       # Success(value=0, ok=False)
+print(result)   # Success(value=0, ok=False)
 ```
 
 The pipe short-circuits and the division step is never executed.
@@ -187,6 +263,45 @@ Available `Pipe` helpers:
 - `.trigger(fn, ex, msg)`: raise exception if condition matches
 
 > Pipes are fully composable using the `|` operator.
+
+Functions can be wrapped using `Pipe` as decorator:
+
+```py
+from bean.core import Pipe
+
+@Pipe
+def dup(x: int|float):
+    return (x * 2, True)
+
+@Pipe
+def half(x: int|float):
+    return (x / 2, True)
+
+pipe = (dup | half).map(int)
+
+print(pipe(10))     # Success(10, ok=True)
+```
+
+#### Using predicates with pipes
+
+Predicates integrate naturally with `Pipe.guard`.
+
+```py
+from bean.core import Pipe, Predicate
+
+@Predicate
+def positive(x: int):
+    return x > 0
+
+pipe = (
+    Pipe[int, int]()
+        .guard(positive)
+        .map(lambda x: x * 2)
+)
+
+print(pipe(5))      # Success(10, ok=True)
+print(pipe(-1))     # Success(-1, ok=False)
+```
 
 #### Shell Commands
 
