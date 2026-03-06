@@ -1,3 +1,4 @@
+from dataclasses import field
 import tempfile, os
 from enum import Enum
 from textwrap import dedent
@@ -12,6 +13,11 @@ class Stage(Enum):
     PROD = "prod"
     TEST = "test"
 
+class Color(Enum):
+    RED   = "#ff0000"
+    GREEN = "#00ff00"
+    BLUE  = "#0000ff"
+
 class TestConfig(BaseTest):
 
     def setUp(self):
@@ -23,9 +29,19 @@ class TestConfig(BaseTest):
             HOST_NAME = ConfigField(str, required=True)
             STAGE = ConfigField(Stage, default=Stage.DEV)
 
+        @BeanConfig.dataclass
+        class DataclassConfig(BeanConfig):
+            NAME: str
+            EMAIL: str
+            DEBUG: bool = False
+            PORT: int = 8080
+            HOST: str = "localhost"
+            COLORS: list[Color] = field(default_factory=lambda: [Color.RED])
+
         bean.BeanConfig._instance = None
         bean.BeanConfig._global_validators = dict()
         self.Config = AppConfig
+        self.DConfig = DataclassConfig
 
     # build
 
@@ -37,7 +53,42 @@ class TestConfig(BaseTest):
         self.assertIn("HOST_NAME", spec)
 
     def test_class_access_before_build_returns_descriptor(self):
-        self.assertIsInstance(self.Config.PORT, bean.BeanConfig._ConfigField)
+        self.assertIsInstance(self.Config.PORT, bean.BeanConfig._Field)
+
+    def test_dataclass_spec_building(self):
+        spec = self.DConfig.spec()
+        self.assertIn("NAME", spec)
+        self.assertIn("EMAIL", spec)
+        self.assertIn("DEBUG", spec)
+        self.assertIn("COLORS", spec)
+
+        field_types = {k: f.type for k, f in spec.items()}
+        self.assertEqual(field_types["NAME"], str)
+        self.assertEqual(field_types["DEBUG"], bool)
+        self.assertEqual(field_types["COLORS"], list[Color])
+
+    def test_dataclass_build_and_values(self):
+        cfg = ( self.DConfig.load()
+            .from_dict({"NAME": "Alice", "EMAIL": "alice@example.com"})
+        ).build()
+
+        self.assertEqual(cfg.NAME, "Alice")
+        self.assertEqual(cfg.EMAIL, "alice@example.com")
+        self.assertEqual(cfg.DEBUG, False)
+        self.assertEqual(cfg.PORT, 8080)
+        self.assertEqual(cfg.HOST, "localhost")
+        self.assertEqual(cfg.COLORS, [Color.RED])
+
+        self.assertEqual(self.DConfig.NAME, "Alice")
+        self.assertEqual(self.DConfig.EMAIL, "alice@example.com")
+        self.assertEqual(self.DConfig.COLORS, [Color.RED])
+        self.assertIsInstance(self.DConfig.DEBUG, bool)
+
+    def test_missing_required_field_raises(self):
+        with self.assertRaises(Exception):
+            ( self.DConfig.load()
+                .from_dict({"EMAIL": "no_name@example.com"})
+            ).build()
 
     # load
 

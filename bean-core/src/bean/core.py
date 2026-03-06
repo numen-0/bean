@@ -40,19 +40,22 @@ __all__ = [
 # imports
 # -----------------------------------------------------------------------------
 
-from functools import wraps
 import re, signal, subprocess, sys, atexit
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from pathlib import Path
 from threading import Event, Thread
 from time import sleep
 from typing import (
-    Callable, Literal, NoReturn, ClassVar, Protocol, Self,
-    List, Dict, TextIO, Tuple, Iterable, Set,
-    Any, Optional, get_args, get_origin, override
+    Any, Literal, Optional, Type,
+    Callable, NoReturn,
+    ClassVar, Protocol, Self,
+    Dict, Iterable, List, Set, Tuple,
+    TextIO,
+    cast, dataclass_transform, get_args, get_origin, override
 )
 
 # -----------------------------------------------------------------------------
@@ -492,7 +495,7 @@ class Logger:
 
     # mimic logging.exception
     def exception(self, msg: str) -> Self:
-        """Log an error message with the current exception traceback."""
+        """ Log an error message with the current exception traceback. """
         import traceback
 
         if sys.exc_info()[0] is not None: # check if is there is any exception
@@ -1210,7 +1213,7 @@ class Scheduler:
 # config
 # -----------------------------------------------------------------------------
 
-type FieldValue = bool|int|float|str|Enum|List
+FieldValue = bool|int|float|str|Enum|list
 type ConfigSource = Literal[
     "args", "dict", "env", "ini", "json", "py", "toml",
 ] | str
@@ -1221,8 +1224,8 @@ class BeanConfig(ABC):
     `BeanConfig` provides a structured, type-safe configuration system based
       on declarative field specifications.
 
-    Subclasses define configuration schema via `_ConfigField` declarations.
-    The framework handles:
+    Subclasses define configuration schema via `_Field` declarations. The
+    framework handles:
 
         - Loading values from one or multiple sources (`json`, `env`, ...)
         - Type enforcement
@@ -1234,7 +1237,7 @@ class BeanConfig(ABC):
     """
 
     @dataclass
-    class _ConfigField[F: FieldValue]:
+    class _Field[F: FieldValue]:
         """ Declarative specification of a single configuration field.
 
         It is purely declarative and contains no runtime state.
@@ -1380,9 +1383,51 @@ class BeanConfig(ABC):
             return None
 
     _instance: ClassVar[Optional[BeanConfig]] = None
-    _spec: ClassVar[Dict[str, _ConfigField]] = {}
+    _spec: ClassVar[Dict[str, _Field]] = {}
     # allow override `{ FIELD_NAME: { FN_NAME: fn, ... }, ... }`
     _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
+
+    @staticmethod
+    @dataclass_transform()
+    def dataclass(bcls: Type[Any]) -> Type[Any]:
+        bcls = dataclass(bcls)
+        dc_cls = cast(type, bcls)
+
+        allowed = get_args(FieldValue)
+        def is_valid_field_type(t: type|type[Any]|Any) -> bool:
+            check_t = get_origin(t) or t
+
+            if check_t is list:
+                if not (sub := get_args(t)): return True
+                t = sub[0]
+
+            return t in allowed or (isinstance(t, type) and issubclass(t, Enum))
+
+        config_fields = {}
+        for f in fields(dc_cls):
+            t = f.type
+
+            if not is_valid_field_type(t):
+                raise TypeError(f"Field '{f.name}' has unsupported type: {t}")
+
+            if f.default is not MISSING:
+                required = False
+                default  = f.default
+            elif f.default_factory is not MISSING:
+                required = False
+                default  = f.default_factory()
+            else:
+                required = True
+                default = None
+
+            config_fields[f.name] = BeanConfig._Field(
+                t, # type: ignore
+                required=required,
+                default=default,
+            )
+
+        bcls._spec.update(config_fields)
+        return bcls
 
     def __init_subclass__(cls, **kwargs):
         """ Build the immutable schema `_spec` at class definition time.
@@ -1393,10 +1438,12 @@ class BeanConfig(ABC):
         """
         super().__init_subclass__(**kwargs)
 
-        fields: Dict[str, BeanConfig._ConfigField] = {}
+        fields: Dict[str, BeanConfig._Field] = {}
+
+        # normal ConfigField discovery
         for base in reversed(cls.__mro__):      # python magic so we also set
             for k, v in base.__dict__.items():  # inherited fields...
-                if isinstance(v, BeanConfig._ConfigField):
+                if isinstance(v, BeanConfig._Field):
                     fields[k] = v
 
         cls._spec = fields
@@ -1406,7 +1453,7 @@ class BeanConfig(ABC):
         cls,
         *keys: str
     ) -> Callable[[Callable[[F], bool]], Callable[[F], bool]]:
-        """ decorator to make custom validators on function definition """
+        """ Decorator to make custom validators on function definition """
 
         def decorator(fn: Callable[[F], bool]) -> Callable[[F], bool]:
             orig_fn = getattr(fn, "__func__", fn) # unwrap staticmethod
@@ -1427,11 +1474,11 @@ class BeanConfig(ABC):
         cls._instance = obj
 
     @classmethod
-    def spec(cls) -> Dict[str, _ConfigField]:
+    def spec(cls) -> Dict[str, _Field]:
         return cls._spec
 
     @classmethod
-    def spec_for(cls, source: ConfigSource) -> Dict[str, _ConfigField]:
+    def spec_for(cls, source: ConfigSource) -> Dict[str, _Field]:
         return {
             k: f
             for k, f in cls._spec.items()
@@ -1439,11 +1486,11 @@ class BeanConfig(ABC):
         }
 
     @classmethod
-    def load[_C: BeanConfig](
-        cls: type[_C],
+    def load[C: BeanConfig](
+        cls: type[C],
         strict: bool = False,
         logger: Optional[Logger] = None,
-    ) -> BeanConfig._ConfigLoader[_C]:
+    ) -> BeanConfig._ConfigLoader[C]:
         return BeanConfig._ConfigLoader(cls, strict, logger)
 
     @classmethod
@@ -1453,7 +1500,7 @@ class BeanConfig(ABC):
         show_defaults: bool = False,
         show_required: bool = False,
     ) -> None:
-        """Pretty-print the current configuration."""
+        """ Pretty-print the current configuration. """
 
         if cls._instance is None:
             raise RuntimeError("Config not loaded")
@@ -1479,7 +1526,7 @@ class BeanConfig(ABC):
 
             print(line)
 
-    class _ConfigLoader[_C: BeanConfig]:
+    class _ConfigLoader[C: BeanConfig]:
         """ App config loader/builder
 
         Receives a schema, and loads sources to fill the config, validating it
@@ -1488,11 +1535,11 @@ class BeanConfig(ABC):
 
         def __init__(
             self,
-            config_cls: type[_C],
+            config_cls: type[C],
             strict: bool = False,
             log: Optional[Logger] = None,
         ):
-            self.config_cls: type[_C] = config_cls
+            self.config_cls: type[C] = config_cls
             self._values: Dict[str, Any] = {}
             self._locked = False
             self.strict = strict
@@ -1502,8 +1549,8 @@ class BeanConfig(ABC):
 
         # post config steps
 
-        def validate(self) -> BeanConfig._ConfigLoader[_C]:
-            """ validate current config """
+        def validate(self) -> BeanConfig._ConfigLoader[C]:
+            """ Validate current config """
 
             errors = []
             spec = self.config_cls.spec()
@@ -1546,7 +1593,7 @@ class BeanConfig(ABC):
 
             def collect_validators(
             ) -> Dict[str, Dict[str, Callable[[FieldValue], bool]]]:
-                """Dynamically collect validators via MRO."""
+                """ Dynamically collect validators via MRO. """
                 validators = {}
 
                 for base in reversed(self.config_cls.__mro__):
@@ -1582,13 +1629,14 @@ class BeanConfig(ABC):
 
             return self
 
-        def build(self) -> _C:
-            """validate and build the config"""
-            obj = self.validate().config_cls()
+        def build(self) -> C:
+            """ Validate and build the config """
+            obj = object.__new__(self.validate().config_cls)
 
             # Note: we override the instance attr not the class attributes
             for k, v in self._values.items():
                 setattr(obj, k, v)
+                setattr(self.config_cls, k, v)
 
             self.config_cls._set_instance(obj)
             return obj
@@ -1614,8 +1662,7 @@ class BeanConfig(ABC):
             data: Dict[str, Any],
             key_mapper: Callable[[str], str] = lambda k: k
         ) -> Self:
-            """
-            Generic loader: cast and store values from any source.
+            """ Generic loader: cast and store values from any source.
 
             - data: dict of raw key -> value
             - source: string for logging purposes
@@ -1857,7 +1904,7 @@ def ConfigField[F: FieldValue](
         - Otherwise, `required` is set to `False`.
     """
     if required is None: required = default is None
-    return BeanConfig._ConfigField(
+    return BeanConfig._Field(
         type,
         description=description,
         required=required,
@@ -1875,46 +1922,45 @@ def ConfigField[F: FieldValue](
 
 @Predicate
 def isPositive(n: int | float) -> bool:
-    """Check that a number is negative `n > 0`."""
+    """ Check that a number is negative `n > 0`. """
     return n > 0
 
 @Predicate
 def isNegative(n: int | float) -> bool:
-    """Check that a number is negative `n < 0`."""
+    """ Check that a number is negative `n < 0`. """
     return n < 0
 
 @Predicate
 def isPort(n: int) -> bool:
-    """Check that a number is a valid TCP/UDP port."""
+    """ Check that a number is a valid TCP/UDP port. """
     return isinstance(n, int) and 0 < n <= 65535
 
 @Predicate
 def nonEmpty(s: str) -> bool:
-    """Check that a string is not empty / blank."""
+    """ Check that a string is not empty / blank. """
     return bool(s.strip())
 
 rEmail = re.compile(r'([A-Za-z0-9]+[.-_])*[A-Za-z0-9]+@[A-Za-z0-9-]+(\.[A-Z|a-z]{2,})+')
 @Predicate
 def isEmail(email: str) -> bool:
-    """Check that a string is a simple valid email."""
+    """ Check that a string is a simple valid email. """
     return bool(re.fullmatch(rEmail, email))
 
 def isDate(fmt: str = "%Y-%m-%d") -> Predicate[str]:
-    from datetime import datetime
+    """ Check that a string is a valid date in the given format. """
 
     def check(date: str) -> bool:
-        """Check that a string is a valid date in the given format."""
         try:
             datetime.strptime(date, fmt)
             return True
         except ValueError:
             return False
 
-    return Predicate(check)
+    return Predicate(check, name=f"isDate[{fmt}]")
 
 @Predicate
 def isUrl(url: str) -> bool:
-    """Check that a string is a valid URL."""
+    """ Check that a string is a valid URL. """
     from urllib.parse import urlparse
     result = urlparse(url)
     return all([result.scheme, result.netloc])
@@ -1924,7 +1970,7 @@ _rHostname = re.compile(
 )
 @Predicate
 def isHost(hostname: str) -> bool:
-    """Check that a string is a syntactically valid hostname."""
+    """ Check that a string is a syntactically valid hostname. """
     if not hostname:
         return False
     if hostname.endswith("."):
@@ -1933,7 +1979,7 @@ def isHost(hostname: str) -> bool:
 
 @Predicate
 def isIPv4(ip: str) -> bool:
-    """Check that a string is a valid IPv4."""
+    """ Check that a string is a valid IPv4. """
     import ipaddress
     try:
         ipaddress.IPv4Address(ip)
@@ -1943,7 +1989,7 @@ def isIPv4(ip: str) -> bool:
 
 @Predicate
 def isIPv6(ip: str) -> bool:
-    """Check that a string is a valid IPv6."""
+    """ Check that a string is a valid IPv6. """
     import ipaddress
     try:
         ipaddress.IPv6Address(ip)
@@ -1952,19 +1998,19 @@ def isIPv6(ip: str) -> bool:
         return False
 
 @Predicate
-def pathExists(path: str) -> bool:
-    """Check that a string is a valid path to something."""
+def pathExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to something. """
     return Path(path).exists()
 
 @Predicate
-def fileExists(path: str) -> bool:
-    """Check that a string is a valid path to a file."""
+def fileExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to a file. """
     p = Path(path)
     return p.exists() and p.is_file()
 
 @Predicate
-def dirExists(path: str) -> bool:
-    """Check that a string is a valid path to a dir."""
+def dirExists(path: str|Path) -> bool:
+    """ Check that a string is a valid path to a dir. """
     p = Path(path)
     return p.exists() and p.is_dir()
 

@@ -91,7 +91,7 @@ if __name__ == "__main__":
 
 ### Config
 
-BeanConfig can be populated from multiple sources, with a defined priority.
+`BeanConfig` can be populated from multiple sources, with a defined priority.
 Available sources:
 
 - `.from_args()`: parse command-line arguments with `argparse`
@@ -133,8 +133,62 @@ class MyConfig(BeanConfig):
 
 MyConfig.print_config()
 ```
+
 > Note: If your type checker complains about check_empty_name, add
->       `@staticmethod` or `# type: ignore`.
+>       `@staticmethod`, `# type: ignore` or declare it outside the class:
+>
+> ```py
+> class MyConfig(BeanConfig):
+>     NAME   = ConfigField(str)
+>     DEBUG  = ConfigField(bool, default=False, short_flag="-d")
+>     PORT   = ConfigField(int, default=8080, validator=isPort)
+>     HOST   = ConfigField(str, default="localhost", validator=isHost)
+>     EMAIL  = ConfigField(str, validator=isEmail)
+>     COLORS = ConfigField(list[Color], default=[Color.RED])
+>
+>
+> @MyConfig.validate("NAME")
+> def check_empty_name(name):
+>     return len(name) > 0
+> ```
+>> Note: Validators declared this way only affect `MyConfig` or its subclasses,
+>>       unless explicitly overridden (field + function names must match).
+
+#### Simpler Dataclass-Style Config
+
+For simpler configs, use the `BeanConfig.dataclass` decorator. It generates a
+dataclass-style config class while maintaining full `BeanConfig` features:
+
+```py
+from dataclasses import field
+from enum import Enum
+from bean.core import BeanConfig
+
+class Color(Enum):
+    RED   = "#ff0000"
+    GREEN = "#00ff00"
+    BLUE  = "#0000ff"
+
+@BeanConfig.dataclass
+class MySimpleConfig(BeanConfig):
+    NAME: str
+    EMAIL: str
+    DEBUG: bool = False
+    PORT: int = 8080
+    HOST: str = "localhost"
+    COLORS: list[Color] = field(default_factory=lambda: [Color.RED])
+
+( MySimpleConfig.load()
+    .from_dict({
+        "NAME": "alex",
+        "EMAIL": "alex@example.com"
+    })
+ ).build().print_config()
+```
+
+- Required fields are inferred from the type annotations.
+- Fields with defaults or `default_factory` are optional.
+- After .build(), values can be accessed via instance or class-level.
 
 ### Predicates
 
