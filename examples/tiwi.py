@@ -16,20 +16,23 @@ python tiwi.py file1.py file2.py ...
 
 ## Notes
 
-- This is a joke project.
+- This is a joke script.
 - Built to test and experiment with
   [`bean.core`](https://github.com/numen-0/bean).
+- TIWI exists to let you defend your code with numbers nobody asked for.
 """
 
-import sys
+import keyword, math, re, sys
+from collections import Counter
 from pathlib import Path
 
 from bean.core import (
-    BeanApp, Log, Logger, Pipe, fileExists, main, ConfigField, BeanConfig, 
+    BeanApp, Log, Logger, Pipe, fileExists, main, ConfigField, BeanConfig,
 )
 
 class Config(BeanConfig):
     DEBUG = ConfigField(bool, default=False)
+    IDENT = ConfigField(int, default=4)
 
 class App(BeanApp):
     def startup(self):
@@ -76,9 +79,9 @@ class App(BeanApp):
                 count += 1
             else:
                 Log.error(f"Path not found: {path}")
+            Log.info("----------------------------------------")
 
         if count > 0:
-            Log.info("----------------------------------------")
             Log.info(f"Total Score           : {total_score / count:.2f}")
         Log.info("========================================")
 
@@ -86,44 +89,143 @@ class App(BeanApp):
 
 # -------------------------
 
+def indent_depth(line: str) -> int:
+    spaces = len(line) - len(line.lstrip(" "))
+    return spaces // Config.IDENT
+
+def symbol_name_entropy(names: list[str]) -> float:
+    symbols = [n for n in names if n not in keyword.kwlist]
+
+    if not symbols: return 0.0
+
+    freq = Counter(symbols)
+    total = sum(freq.values())
+
+    entropy = 0.0
+    for count in freq.values():
+        p = count / total
+        entropy -= p * math.log2(p)
+
+    return entropy
+
 def analyze(path: Path) -> dict[str, float]:
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
+    lcode = [l for line in lines if (l := line.split("#")[0]).strip()]
+    lcomments = [l := line[:line.index("#")] for line in lines if "#" in line]
+    tcode = "\n".join(lcode)
+    tccomments = "\n".join(lcomments)
 
     total = len(lines)
     blank = sum(1 for l in lines if not l.strip())
-    comments = sum(1 for l in lines if l.strip().startswith("#"))
+    comments = len(lcomments)
     max_len = max((len(l) for l in lines), default=0)
 
-    score = 100
+    # metrics
 
-    # file too big penalty
-    if total > 500:
-        score -= 20
-    elif total > 300:
-        score -= 10
+    #* Colon Density (CD)
+    colon_count = tcode.count(":")
+    colon_density = colon_count / total if total else 0
 
-    # long line penalty
-    if max_len > 120:
-        score -= 15
-    elif max_len > 88:
-        score -= 5
+    #* Parenthesis Aggression Ratio (PAR)
+    paren_count = sum(tcode.count(c) for c in "()<>{}[]")
+    par_ratio = paren_count / total if total else 0
 
-    # no comments penalty
-    if comments == 0:
-        score -= 10
+    #* Import Flexing Score (IFS)
+    imports = sum(
+        # Note: not exact, but try to count "import x, y, c, ..."
+        len(l.split(",")) if l.strip().startswith("import ") else 1
+        for l in lcode if l.strip().startswith(("import ", "from "))
+    )
+    functions = sum(1 for l in lcode if l.strip().startswith("def "))
+    classes = sum(1 for l in lcode if l.strip().startswith("class "))
+    import_flex = imports / ((functions + classes) or 1)
 
-    # too many blank lines penalty
-    if total > 0 and blank / total > 0.4:
-        score -= 5
+    #* Indentation Depth Peak (IDP)
+    indent_depth_peak = max((
+        indent_depth(l)
+        for l in lcode if l.strip()),
+        default=0
+    )
 
+    #* Symbol Name Entropy (SNE)
+    symbols = re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", tcode)
+    sne = symbol_name_entropy(symbols)
+
+    #* Magic Number Index (MNI)
+    numeric_literals = len(re.findall(r"\b\d+\b", tcode))
+    magic_number_index = numeric_literals / ((functions + classes) or 1)
+
+    #* Despair Metric (DM)
+    despair = sum(
+        tccomments.count(tag) for tag in ("TODO", "FIXME", "HACK")
+    )
+
+    # score
+
+    score = 100.0
+
+    #* file too big penalty
+    if total > 500:             score *= 0.93
+    elif total > 300:           score *= 0.90
+
+    #* long line penalty
+    if max_len > 120:           score *= 0.92
+    elif max_len > 100:         score *= 0.95
+    elif max_len > 80:          score *= 0.97
+
+    #* comments penalty
+    if comments:                score *= 0.90
+
+    #* blank lines penalty
+    blank_ratio = blank / total if total else 0
+    if blank_ratio > 0.4:       score *= 0.85
+    elif blank_ratio > 0.2:     score *= 0.90
+    elif blank_ratio > 0.1:     score *= 0.95
+
+    #* Colon Density (CD)
+    if colon_density > 0.5:     score *= 0.90
+    elif colon_density < 0.1:   score *= 0.95
+
+    #* Parenthesis Aggression Ratio (PAR)
+    if par_ratio > 1.5:         score *= 0.93
+
+    #* Import Flexing Score (IFS)
+    if import_flex < 0.2:       score *= 0.95
+    elif import_flex > 3:       score *= 0.90
+
+    #* Indentation Depth Peak (IDP)
+    if indent_depth_peak > 6:   score *= 0.93
+    elif indent_depth_peak < 2: score *= 0.98
+
+    #* Symbol Name Entropy (SNE)
+    if sne > 8:                 score *= 0.97
+    elif sne < 2:               score *= 0.98
+
+    #* Magic Number Index (MNI)
+    if magic_number_index > 10: score *= 0.95
+
+    #* Despair Metric (DM)
+    if despair > 5:             score *= 0.9
+
+    score = max(0, min(score, 100))
 
     return {
-        "score": max(0, score),
+        "score": round(score, 3),
+
         "lines": total,
-        "blank_lines": blank,
+        "code": len(lcode),
         "comments": comments,
-        "max_line_length": max_len,
+        "blank-lines": blank,
+        "max-line-length": max_len,
+
+        "colon-density": round(colon_density, 3),
+        "par-ratio": round(par_ratio, 3),
+        "import-flex-score": round(import_flex, 3),
+        "indent-depth-peak": indent_depth_peak,
+        "variable-name-entropy": round(sne, 3),
+        "magic-number-index": round(magic_number_index, 3),
+        "despair-metric": despair,
     }
 
 
