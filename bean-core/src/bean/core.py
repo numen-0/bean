@@ -45,7 +45,6 @@ from abc import ABC, abstractmethod
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime
 from enum import Enum
-from functools import wraps
 from pathlib import Path
 from threading import Event, Thread
 from time import sleep
@@ -673,10 +672,10 @@ class Success[T]:
 @dataclass(slots=True, frozen=True)
 class Predicate[T]:
     fn: Callable[[T], bool]
-    name: Optional[str] = None
+    name: str = ""
 
     def __post_init__(self):
-        if self.name is None:
+        if not self.name:
             object.__setattr__(self, "name", self.fn.__name__)
 
     def __call__(self, value: T) -> bool:
@@ -714,7 +713,11 @@ class Predicate[T]:
 # -----------------------------------------------------------------------------
 
 type PipeResult[T] = Success[T] | Tuple[T, bool]
+type PipeFn[I, O] = Callable[[I], PipeResult[O]]
 
+def _identity_pipe[T](v: T) -> PipeResult[T]: return Success.Ok(v)
+
+@dataclass(frozen=True, slots=True)
 class Pipe[I, O]:
     """ A composable transformation pipeline.
 
@@ -733,35 +736,42 @@ class Pipe[I, O]:
         to the next pipe, so the type assumptions remain safe in practice.
     """
 
-    def __init__(
-        self,
-        fn: Optional[Callable[[I], PipeResult[O]]] = None
-    ):
-        if fn is None:
-            def no_op(v): return Success.Ok(v)
-            fn = no_op
-        self._fn: Callable[[I], PipeResult[O]] = fn
+    fn: PipeFn[I, O] = cast(PipeFn[I, O], _identity_pipe)
+    name: str = ""
+
+    def __post_init__(self):
+        if not self.name:
+            object.__setattr__(self, "name", self.fn.__name__)
 
     def __call__(self, value: I) -> Success[O]:
-        return Success.from_obj(self._fn(value))
+        return Success.from_obj(self.fn(value))
 
     def __or__[R](
         self,
-        other: Callable[[O], PipeResult[R]]
+        other: PipeFn[O, R]
     ) -> Pipe[I, R]:
 
         other = other if isinstance(other, Pipe) else Pipe(other)
 
-        @wraps(other._fn)
         def join(value: I) -> Success[R]:
             res = self(value)
             return other(res.value) if res.ok else res  # type: ignore
 
-        return Pipe(join)
+        return Pipe(join, name=f"{self.name} | {other.name}")
+
+    def __repr__(self):
+        return f"<Pipe {self.name}>"
+
+    @staticmethod
+    def _fn_name(fn: Optional[Callable], fallback: str = "") -> str:
+        name = getattr(fn, "__name__", None)
+        if not name or name == "<lambda>":
+            return fallback
+        return name
 
     def retry[R](
         self,
-        fn: Callable[[O], PipeResult[R]],
+        fn: PipeFn[O, R],
         attempts: int = 3,
         delay: float = 0.5,
     ) -> Pipe[I, R]:
@@ -787,7 +797,7 @@ class Pipe[I, O]:
             assert res is not None
             return res
 
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"retry[{Pipe._fn_name(fn)}]")
 
     def map[R](
         self,
@@ -798,7 +808,7 @@ class Pipe[I, O]:
         Returns: `(fn(value), True)`
         """
         def foo(value: O): return Success.Ok(fn(value))
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"map[{Pipe._fn_name(fn)}]")
 
     def guard[R](
         self,
@@ -819,7 +829,7 @@ class Pipe[I, O]:
                 value = err(value) if callable(err) else err # type: ignore
             return Success(value, False)
 
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"guard[{Pipe._fn_name(fn)}]")
 
     def peek(
         self,
@@ -835,11 +845,11 @@ class Pipe[I, O]:
             fn(value)
             return Success.Ok(value)
 
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"peek[{Pipe._fn_name(fn)}]")
 
     def fallback[R, E](
         self,
-        fn: Callable[[O], PipeResult[R]],
+        fn: PipeFn[O, R],
         fb: E
     ) -> Pipe[I, R|E]:
         """ Convert a failing function into a successful one with a fallback.
@@ -854,13 +864,13 @@ class Pipe[I, O]:
             res = Success.from_obj(fn(value))
             return Success.Ok(res.value if res.ok else fb)
 
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"fallback[{Pipe._fn_name(fn)}]")
 
     def branch[R, E](
         self,
         cond_fn: Callable[[O], bool],
-        success_fn: Optional[Callable[[O], PipeResult[R]]] = None,
-        fail_fn: Optional[Callable[[O], PipeResult[E]]] = None,
+        success_fn: Optional[PipeFn[O, R]] = None,
+        fail_fn: Optional[PipeFn[O, E]] = None,
     ) -> Pipe[I, O|R|E]:
         """ Conditional branching inside a pipe.
 
@@ -880,7 +890,9 @@ class Pipe[I, O]:
                 return Success.from_obj(fail_fn(value))
             return Success(value, cond)
 
-        return self | Pipe(foo)
+        _n = Pipe._fn_name
+        return self | Pipe(
+            foo, f"branch[{_n(cond_fn)} ? {_n(success_fn)} : {_n(success_fn)}]")
 
     def trigger(
         self,
@@ -899,7 +911,7 @@ class Pipe[I, O]:
                 raise ex(msg or f"Pipe trigger activated on value: {value}")
             return Success.Ok(value)
 
-        return self | Pipe(foo)
+        return self | Pipe(foo, f"trigger[{Pipe._fn_name(fn)}]")
 
 # -----------------------------------------------------------------------------
 # shell
