@@ -1388,9 +1388,9 @@ class BeanConfig(ABC):
     _global_validators: Dict[str, Dict[str, Callable[[FieldValue], bool]]] = {}
 
     @staticmethod
-    @dataclass_transform()
+    @dataclass_transform(frozen_default=True, kw_only_default=True)
     def dataclass(bcls: Type[Any]) -> Type[Any]:
-        bcls = dataclass(bcls)
+        bcls = dataclass(bcls, slots=True)
         dc_cls = cast(type, bcls)
 
         allowed = get_args(FieldValue)
