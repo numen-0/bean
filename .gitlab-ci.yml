@@ -1,0 +1,13 @@
+test:
+  stage: test
+  image: python:3.14
+
+  before_script:
+    - pip install -e ./bean-*
+
+  script:
+    - sh ./run_tests.sh
+
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
