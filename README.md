@@ -2,17 +2,13 @@
 
 ```
 
+                                ,---.      ,---.
+                               /     `-<>-'  :D \
+                               |                |
+                                . .            .
+                                .`-~~~~~~~~~~-'
 
-                               ,---.      ,---.
-                              /     `-<>-'  :D \
-                              |                |
-                               . .            .
-                                `-~~~~~~~~~~-'
-
-                             Bean there, done that
-                           Bean there, debugged that
-                               May contain nuts
-
+                              Bean there, done that
 
 ```
 
@@ -59,8 +55,9 @@ Each package:
 
 `bean` currently provides:
 
-- [`bean.core`](/bean-core): core runtime & application primitives
-- [`bean.test`](/bean-test): lightweight testing utilities (WIP)
+| [`bean.core`](/bean-core)       | core runtime & application primitives      |
+| [`bean.config`](/bean-config)   | minimal configuration framework            |
+| [`bean.test`](/bean-test)       | lightweight testing utilities (WIP)        |
 
 > Beware: More may sprout.
 
@@ -73,7 +70,7 @@ Each package:
 ```sh
 uv python install 3.14
 uv venv --python 3.14
-. .venv/bin/activate
+. ./.venv/bin/activate
 ```
 
 2. install packages:

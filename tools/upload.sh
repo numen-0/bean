@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+MODS="
+bean-core
+bean-config
+"
+
 [ -d ".venv" ] && . ./.venv/bin/activate
 
 ./run_tests.sh
@@ -8,7 +13,7 @@ set -eu
 uv pip install --upgrade build
 uv pip install --upgrade twine
 
-for dir in bean-core; do (
+for dir in $MODS; do (
     cd "$dir"
     [ -d "./dist" ] && rm -rf "./dist"
     python -m build
