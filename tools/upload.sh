@@ -17,5 +17,5 @@ for dir in $MODS; do (
     cd "$dir"
     [ -d "./dist" ] && rm -rf "./dist"
     python -m build
-    python -m twine upload ./dist/*
+    python -m twine upload --verbose ./dist/*
 ) done

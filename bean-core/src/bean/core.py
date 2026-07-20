@@ -10,7 +10,7 @@
 #                                                                              #
 # ============================================================================ #
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __doc__     = "Tiny framework for bootstrapping apps"
 __author__  = "numen-0"
 __license__ = "MIT"
