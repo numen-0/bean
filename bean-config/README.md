@@ -2,8 +2,8 @@
 
 `bean.config` is a minimal configuration framework for Python.
 
-Define a configuration schema as a class, then populate it from one or more
-config sources with type validation and customizable source priorities.
+Define your configuration as a class and populate it from command-line
+arguments, environment variables, defaults, overrides, or custom sources.
 
 > Just enough to arrange some beans.
 
@@ -13,10 +13,41 @@ config sources with type validation and customizable source priorities.
 
 With `bean.config` you get:
 
-- **Typed configuration** from a simple class definition.
-- **Multiple sources** (`args`, `envs`, `overrides`, custom sources).
-- **Customizable priorities** between configuration sources.
-- **Debugging helpers** to inspect loaded configurations.
+- Type-safe configuration classes.
+- Automatic loading from multiple *built-in* or *user-defined* sources.
+- Configurable source priority.
+- Custom validators and normalizers.
+
+```py
+from enum import Enum
+from bean import config
+
+class Mode(Enum):
+    DEV = "dev"
+    PROD = "prod"
+
+@config
+class AppConfig:
+    DEBUG: bool = False
+    MODE: Mode = Mode.DEV
+    HOST: str
+    PORT: int = 8080
+
+# `AppConfig` is now the loaded configuration instance.
+print(config.dump_str(AppConfig))
+```
+
+> **Note**:
+>
+> To quickly inspect the public API:
+>
+> ```sh
+> python -c "
+>     import bean.config as bean
+>     for v in sorted(dir(bean)):
+>         print(f'- {v}')
+> "
+> ```
 
 ## Installation
 
@@ -43,39 +74,101 @@ This is a quick reference for the main `API`.
 
 For full details, see the [source code](/bean-config/src/bean/config.py).
 
-### Config Example
+### Loading
 
 ```py
-from enum import Enum
-from bean import config
+cfg = config.load(
+    Config,
+    argv=["--host", "localhost"],
+)
 
-class Color(Enum):
-    RED   = "#ff0000"
-    GREEN = "#00ff00"
-    BLUE  = "#0000ff"
+config.load(
+    Config,
+    env_prefix="APP",
+    overrides={
+        "HOST": "localhost",
+    },
+)
 
-@config
-class MySimpleConfig:
-    NAME: str
-    EMAIL: str
-    DEBUG: bool = False
-    PORT: int = 8080
-    HOST: str = "localhost"
-    COLORS: list[Color] = [Color.RED]
-
-print(config.dump_str(MySimpleConfig))
+config.load(
+    Config,
+    priorities=("extra", "defaults"), # only load from extra and then defaults
+    extra_sources={
+        "extra": foo,                 # foo(field) -> value
+    },
+)
 ```
 
-#### Sources
-
-Built-in sources
+Built-in sources:
 
 | source            | description                                              |
 |:-----------------:|:---------------------------------------------------------|
-| `args`            | command-line arguments parsed with `argparse`.           |
-| `envs`            | environment variables.                                   |
-| `defaults`        | default values defined on the configuration class.       |
-| `overrides`       | values supplied via the `overrides` parameter.           |
+| `args`            | Command-line arguments (`argparse`).                     |
+| `envs`            | Environment variables.                                   |
+| `defaults`        | Default class attributes.                                |
+| `overrides`       | Explicit values passed via the `overrides` parameter.    |
+
+### Validators
+
+Validators can `raise` exceptions or return a boolean signaling success:
+
+```
+class Config:
+    NAME: str
+    PORT: int
+
+    @config.validator("PORT")
+    def port_is_valid(self, port: int) -> bool:
+        return 0 < port <= 65535
+
+    @config.validator("NAME")
+    def name_is_valid(self, name: str):
+      if name == "":
+          raise ValueError("Empty NAME")
+```
+
+> **Note**: Validators may return `True`, `False` or `None`.
+
+> **Note**: A validator fails only if it returns `False` or raises an exception.
+
+### Normalizers
+
+Normalizers can be used to finalize the configuration load.
+
+```
+class Config:
+    NAME: str
+    HOST: str
+
+    @config.normalizer("NAME", "HOST")
+    def lowercase(self, name: str, host: str) -> tuple[str, str]:
+        return name.lower(), host.lower()
+
+    @config.normalizer("NAME", "HOST", series=True)
+    def strip(self, value: str) -> str:
+        return value.strip()
+
+    @config.normalizer()
+    def normalize(self) -> None:
+      ...
+```
+
+> **Note**:
+>
+> The return value must match the declared fields
+>
+> - No fields -> return `None`
+> - One field -> return the normalized value
+> - Multiple fields -> return a `tuple` with one value per field
+> - `series=True` -> the function receives and returns one field at a time
+
+## Notes
+
+Validators and normalizers follow the same definition rules:
+
+- The number of declared fields must match the function parameters.
+- They work with instance methods, `@staticmethod`, and `@classmethod`.
+- Execution order is determined by `priority`, then by function name.
 
 ## License
 
