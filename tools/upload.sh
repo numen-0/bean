@@ -56,7 +56,8 @@ esac
 
 #* build & publish
 
-python -m pip install -U build twine
+python -m ensurepip --upgrade
+python -m pip install -U pip build twine
 
 echo "$PUBLISH" | while IFS='|' read -r dir version; do
     (
