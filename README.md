@@ -8,7 +8,7 @@
                                 . .            .
                                 .`-~~~~~~~~~~-'
 
-                              Bean there, done that
+                             Bean there, done that.
 
 ```
 
@@ -55,6 +55,8 @@ Each package:
 
 `bean` currently provides:
 
+| Package                         | Description                                |
+|:-------------------------------:|:-------------------------------------------|
 | [`bean.core`](/bean-core)       | core runtime & application primitives      |
 | [`bean.config`](/bean-config)   | minimal configuration framework            |
 | [`bean.test`](/bean-test)       | lightweight testing utilities (WIP)        |

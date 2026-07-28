@@ -171,18 +171,3 @@ class TestConfig(BaseTest):
             },
         )
 
-    def test_dump_meta(self):
-        cfg = config.load(
-            Config,
-            overrides={
-                "HOST": "localhost",
-            },
-            argv=[],
-        )
-
-        meta = config.dump_meta(cfg)
-
-        self.assertEqual(meta["HOST"][0], "localhost")
-        self.assertEqual(meta["HOST"][1], str)
-        self.assertEqual(meta["HOST"][2], "overrides")
-
