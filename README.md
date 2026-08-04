@@ -18,26 +18,26 @@
 
 ## What is `bean`?
 
-`bean` is a tiny library of reusable packages for small Python applications.
+`bean` is a tiny collection of reusable packages for small Python applications.
 
 Designed to be:
 
-- Single-file oriented
+- Small and self-contained (one file, one package)
 - Dependency-free
 - Easy to:
-    - distribute
-    - read & reason about
-    - reuse
-    - extend
+  - read & reason about
+  - reuse
+  - extend
+  - distribute
 
 Built for small services, humble tools, side quests, and mildly ambitious
 revolutions.
 
-> Be an unbeanlievable bean with bean.
+> Be an *unbeanlievable* bean with bean.
 
 ## Project Structure
 
-This repository is a **monorepo** containing multiple packages.
+`bean` is a **monorepo** containing multiple packages.
 
 Each package:
 
@@ -63,25 +63,59 @@ Each package:
 
 > Beware: More may sprout.
 
+## Installation
+
+Using `pip`:
+
+```sh
+MOD="core"
+pip install --upgrade "bean-$MOD"
+```
+
+Or grab a package directly with `curl`:
+
+```sh
+MOD="core"
+curl -Ls \
+    https://raw.githubusercontent.com/numen-0/bean/main/bean-$MOD/src/bean/$MOD.py
+```
+
 ## Local Development
 
 ### Setup
 
-1. setup environment:
+1. Setup environment:
 
-```sh
-uv python install 3.14
-uv venv --python 3.14
-. ./.venv/bin/activate
-```
+  * Using python:
 
-2. install packages:
+  ```sh
+  python3.14 -m venv .venv
+  . ./.venv/bin/activate
+  ```
 
-```sh
-uv pip install -e ./bean-*
-```
+  * Using `uv`:
 
-3. quick `bean` check (for `bean.core`):
+  ```sh
+  uv python install 3.14
+  uv venv --python 3.14
+  . ./.venv/bin/activate
+  ```
+
+2. Install packages:
+
+  * Using python:
+
+  ```sh
+  python -m pip install -e ./bean-*
+  ```
+
+  * Using `uv`:
+
+  ```sh
+  uv pip install -e ./bean-*
+  ```
+
+3. Quick `bean` check (for `bean.core`):
 
 ```sh
 python -c "

@@ -112,7 +112,7 @@ Built-in sources:
 
 Validators can `raise` exceptions or return a boolean signaling success:
 
-```
+```py
 class Config:
     NAME: str
     PORT: int
@@ -135,7 +135,7 @@ class Config:
 
 Normalizers can be used to finalize the configuration load.
 
-```
+```py
 class Config:
     NAME: str
     HOST: str
