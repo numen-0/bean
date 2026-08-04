@@ -54,6 +54,9 @@ jobs:
 
       - name: Build packages
         run: |
+          rm -rf dist
+          mkdir dist
+
           for dir in bean-*; do
             [ -f "$dir/pyproject.toml" ] || continue
 
@@ -62,6 +65,8 @@ jobs:
               rm -rf dist
               python -m build
             )
+
+            cp "$dir"/dist/* dist/
           done
 
       - name: Publish packages
