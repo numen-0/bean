@@ -109,6 +109,18 @@ from bean import ${BEAN}
 ...
 \`\`\`
 
+> **Note**:
+>
+> To quickly inspect the public API:
+>
+> \`\`\`sh
+> python -c "
+>     import bean.${BEAN} as bean
+>     for v in sorted(dir(bean)):
+>         print(f'- {v}')
+> "
+> \`\`\`
+
 ## Installation
 
 Using \`pip\`:
@@ -120,7 +132,7 @@ pip install --upgrade $DIR
 Using \`curl\` (direct download):
 
 \`\`\`sh
-curl -Ls \
+curl -Ls \\
     https://raw.githubusercontent.com/numen-0/bean/main/$PACKAGE
 \`\`\`
 

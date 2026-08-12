@@ -10,7 +10,7 @@
 #                                                                              #
 # ============================================================================ #
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 __doc__     = "Minimal config framework"
 __author__  = "numen-0"
 __license__ = "MIT"
@@ -105,22 +105,41 @@ def build[T](
 
         if collection_type in (list, set, tuple):
             args = _.get_args(to_type)
+            raw_values = [v.strip() for v in value.split(",") if v.strip()]
             element_type = args[0] if args else str
 
+            # tuple[T, ...]
+            if collection_type is tuple and len(args) == 2 and args[1] is Ellipsis:
+                types = [args[0]] * len(raw_values)
+
+            # tuple[T1, T2, T3]
+            elif collection_type is tuple and args:
+                if len(raw_values) != len(args):
+                    return value, ValueError(
+                        f"Expected {len(args)} values for {to_type}, "
+                        f"got {len(raw_values)}"
+                    )
+
+                types = list(args)
+
+            # list[T], set[T], tuple[T], or untyped containers
+            else:
+                element_type = args[0] if args else str
+                types = [element_type] * len(raw_values)
+
             values: list[tuple[Primitive, Exception|None]] = [ # type:ignore
-                cast(v.strip(), element_type)
-                for v in value.split(",")
-                if v.strip()
+                cast(v, t)
+                for v, t in zip(raw_values, types)
             ]
 
-            errors = [v[1] for v in values if v[1] is not None]
+            errors = [e for _, e in values if e is not None]
 
             if errors:
                 return value, ExceptionGroup(
                     f"Invalid values on container", errors
                 )
 
-            return collection_type(v[0] for v in values), None
+            return collection_type(v for v, e in values), None
 
         if is_enum_t(to_type):
             mapping = enum_map.get(to_type) # type:ignore

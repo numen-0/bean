@@ -74,6 +74,36 @@ This is a quick reference for the main `API`.
 
 For full details, see the [source code](/bean-config/src/bean/config.py).
 
+### Field Types
+
+Configuration fields may use the following types:
+
+```py
+type Primitive  = bool | int | float | str | _enum.Enum
+type FieldValue = (
+    Primitive
+    | set[Primitive]
+    | list[Primitive]
+    | tuple[Primitive, ...]
+)
+
+class Mode(Enum):
+    DEV = "dev"
+    PROD = "prod"
+
+class Config:
+    NAME: str
+    PORT: int
+    MODE: Mode
+
+    WORDS: list[str]
+    NUMBERS: tuple[int, ...]            # variable-lenght, fixed type
+    VECTOR: tuple[float, float, float]  # fixed-lenght
+    MIX: tuple[str, int, bool]          # fixed-length, mixed types
+```
+
+> **Note**: Type unions or optional fields are not supported
+
 ### Loading
 
 ```py

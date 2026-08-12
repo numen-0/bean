@@ -150,7 +150,6 @@ class TestConfig(BaseTest):
 
         self.assertEqual(cfg.HOST, "vault-host")
 
-
     def test_dump(self):
         cfg = config.load(
             Config,
@@ -171,3 +170,171 @@ class TestConfig(BaseTest):
             },
         )
 
+    def test_tuples(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={
+                "NUMBERS": "1,2,3",
+            },
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, (1, 2, 3))
+        self.assertIsInstance(cfg.NUMBERS, tuple)
+        self.assertTrue(all(isinstance(x, int) for x in cfg.NUMBERS))
+
+    def test_tuples_with_whitespace(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"NUMBERS": " 1,  2 , 3 "},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, (1, 2, 3))
+
+    def test_tuples_single_value(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"NUMBERS": "42"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, (42,))
+
+    def test_tuples_empty(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"NUMBERS": ""},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, tuple())
+
+    def test_tuples_empty_values_are_ignored(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"NUMBERS": "1,,2, ,3"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, (1, 2, 3))
+
+    def test_tuples_strings(self):
+        class Config:
+            VALUES: tuple[str, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"VALUES": "foo,bar,baz"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.VALUES, ("foo", "bar", "baz"))
+
+    def test_tuples_bool(self):
+        class Config:
+            VALUES: tuple[bool, ...]
+
+        cfg = config.load(
+            Config,
+            overrides={"VALUES": "true,false,yes"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.VALUES, (True, False, True))
+
+    def test_tuples_invalid_value(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        with self.assertRaises(ExceptionGroup):
+            config.load(
+                Config,
+                overrides={"NUMBERS": "1,nope,3"},
+                argv=[],
+            )
+
+    def test_tuples_multiple_invalid_values(self):
+        class Config:
+            NUMBERS: tuple[int, ...]
+
+        try:
+            config.load(
+                Config,
+                overrides={"NUMBERS": "nope,2,wat,4"},
+                argv=[],
+            )
+        except ExceptionGroup as e:
+            self.assertEqual(len(e.exceptions), 1)
+
+            container_errors: ExceptionGroup = e.exceptions[0] # type:ignore
+
+            self.assertIsInstance(container_errors, ExceptionGroup)
+            self.assertEqual(len(container_errors.exceptions), 2)
+
+        else:
+            self.fail("Expected ExceptionGroup")
+
+    def test_tuples_fixed_length(self):
+        class Config:
+            NUMBERS: tuple[int, int, int]
+
+        cfg = config.load(
+            Config,
+            overrides={"NUMBERS": "1,2,3"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.NUMBERS, (1, 2, 3))
+
+    def test_tuples_fixed_length_too_few(self):
+        class Config:
+            NUMBERS: tuple[int, int, int]
+
+        with self.assertRaises(Exception):
+            config.load(
+                Config,
+                overrides={"NUMBERS": "1,2"},
+                argv=[],
+            )
+
+    def test_tuples_fixed_length_too_many(self):
+        class Config:
+            NUMBERS: tuple[int, int, int]
+
+        with self.assertRaises(Exception):
+            config.load(
+                Config,
+                overrides={"NUMBERS": "1,2,3,4"},
+                argv=[],
+            )
+
+    def test_tuples_mixed_types(self):
+        class Config:
+            VALUE: tuple[int, str, bool]
+
+        cfg = config.load(
+            Config,
+            overrides={"VALUE": "42,hello,true"},
+            argv=[],
+        )
+
+        self.assertEqual(cfg.VALUE, (42, "hello", True))
+        self.assertIsInstance(cfg.VALUE[0], int)
+        self.assertIsInstance(cfg.VALUE[1], str)
+        self.assertIsInstance(cfg.VALUE[2], bool)

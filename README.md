@@ -65,6 +65,10 @@ Each package:
 
 ## Installation
 
+Requirements:
+
+- Python `3.14`
+
 Using `pip`:
 
 ```sh
@@ -77,7 +81,7 @@ Or grab a package directly with `curl`:
 ```sh
 MOD="core"
 curl -Ls \
-    https://raw.githubusercontent.com/numen-0/bean/main/bean-$MOD/src/bean/$MOD.py
+    "https://raw.githubusercontent.com/numen-0/bean/main/bean-$MOD/src/bean/$MOD.py"
 ```
 
 ## Local Development
@@ -106,17 +110,17 @@ uv python install 3.14
 uv sync --all-packages
 ```
 
-3. Quick `bean` check (for `bean.core`):
-
-```sh
-python -c "
-    import bean.core as bean
-    print('[bean.core]')
-    print(f'version: {bean.__version__}')
-    print(f'doc: {bean.__doc__}')
-    print(f'by: {bean.__author__}')
-"
-```
+> Quick `bean` check (for `bean.core`):
+>
+> ```sh
+> python -c "
+>     import bean.core as bean
+>     print('[bean.core]')
+>     print(f'version: {bean.__version__}')
+>     print(f'doc: {bean.__doc__}')
+>     print(f'by: {bean.__author__}')
+> "
+> ```
 
 ### Running Tests
 
