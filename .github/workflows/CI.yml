@@ -98,5 +98,26 @@ jobs:
         run: pip install -e ./bean-*
 
       - name: Tag packages
-        run: sh tools/tag.sh
-
+        run: |
+          for dir in bean-*; do
+              module="${dir#bean-}"
+          
+              version="$(
+                  cd "$dir"
+                  python -c '
+                      from bean.${module} import __version__
+                      print(__version__)
+                  '
+              )"
+         
+              tag="${dir}-${version}"
+          
+              if git rev-parse "$tag" >/dev/null 2>&1; then
+                  echo "'$tag' already exists."
+                  continue
+              fi
+          
+              echo "Pushing tag: $tag"
+              git tag "$tag"
+              git push origin "$tag"
+          done
