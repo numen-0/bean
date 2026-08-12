@@ -10,7 +10,7 @@
 #                                                                              #
 # ============================================================================ #
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __doc__     = "Minimal config framework"
 __author__  = "numen-0"
 __license__ = "MIT"
@@ -100,10 +100,27 @@ def build[T](
             if v in ("0", "false", "no", "off"): return False, None
             return value, ValueError(f"Invalid boolean: {value}")
 
-        if to_type in (list, set, tuple):
-            return to_type(v.strip()
-                           for v in value.split(",")
-                           if v.strip()), None
+        origin = _.get_origin(to_type)
+        collection_type = origin or to_type
+
+        if collection_type in (list, set, tuple):
+            args = _.get_args(to_type)
+            element_type = args[0] if args else str
+
+            values: list[tuple[Primitive, Exception|None]] = [ # type:ignore
+                cast(v.strip(), element_type)
+                for v in value.split(",")
+                if v.strip()
+            ]
+
+            errors = [v[1] for v in values if v[1] is not None]
+
+            if errors:
+                return value, ExceptionGroup(
+                    f"Invalid values on container", errors
+                )
+
+            return collection_type(v[0] for v in values), None
 
         if is_enum_t(to_type):
             mapping = enum_map.get(to_type) # type:ignore
@@ -230,7 +247,7 @@ def build[T](
 
         elif ((to_type := f_type) in (list, tuple, set)
                 or (to_type := origin) in (list, tuple, set)):
-            assert(isinstance(value, list))
+            assert isinstance(value, (list, tuple, set))
             value = to_type(value)
 
         values[field] = value
