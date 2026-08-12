@@ -84,36 +84,27 @@ curl -Ls \
 
 ### Setup
 
-1. Setup environment:
+- Using python:
 
-  * Using python:
+  1. Setup environment:
 
   ```sh
   python3.14 -m venv .venv
   . ./.venv/bin/activate
   ```
 
-  * Using `uv`:
+  2. Install packages:
 
   ```sh
-  uv python install 3.14
-  uv venv --python 3.14
-  . ./.venv/bin/activate
+  for bean in ./bean-*; do python -m pip install -e ./bean-*; done
   ```
 
-2. Install packages:
+- Using `uv`:
 
-  * Using python:
-
-  ```sh
-  python -m pip install -e ./bean-*
-  ```
-
-  * Using `uv`:
-
-  ```sh
-  uv pip install -e ./bean-*
-  ```
+```sh
+uv python install 3.14
+uv sync --all-packages
+```
 
 3. Quick `bean` check (for `bean.core`):
 

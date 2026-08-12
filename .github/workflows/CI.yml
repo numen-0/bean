@@ -24,7 +24,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install packages
-        run: pip install -e ./bean-*
+        run: pip install ./bean-*
 
       - name: Run tests
         run: sh run_tests.sh
@@ -95,7 +95,7 @@ jobs:
           python-version: "3.14"
 
       - name: Install packages
-        run: pip install -e ./bean-*
+        run: pip install ./bean-*
 
       - name: Tag packages
         run: |

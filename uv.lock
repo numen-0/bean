@@ -1,0 +1,23 @@
+version = 1
+revision = 3
+requires-python = ">=3.14"
+
+[manifest]
+members = [
+    "bean",
+    "bean-config",
+    "bean-core",
+]
+
+[[package]]
+name = "bean"
+version = "0.0.0"
+source = { virtual = "." }
+
+[[package]]
+name = "bean-config"
+source = { editable = "bean-config" }
+
+[[package]]
+name = "bean-core"
+source = { editable = "bean-core" }

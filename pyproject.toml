@@ -1,0 +1,9 @@
+[project]
+name = "bean"
+description= "Small, fun, dependency-free beans."
+version = "0.0.0"
+requires-python = ">=3.14"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["bean-*"]
