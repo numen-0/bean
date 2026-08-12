@@ -104,10 +104,10 @@ jobs:
           
               version="$(
                   cd "$dir"
-                  python -c '
+                  python -c "
                       from bean.${module} import __version__
                       print(__version__)
-                  '
+                  "
               )"
          
               tag="${dir}-${version}"
